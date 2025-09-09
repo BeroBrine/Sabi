@@ -97,7 +97,6 @@ impl AudioProcessor {
 
         let mut mono_buffer = AudioBuffer::<f32>::new(stereo_buffer.capacity() as u64, mono_spec);
         mono_buffer.render_reserved(Some(stereo_buffer.frames()));
-        // println!("the mono buffer is {:?}", mono_buffer.chan(0));
 
         let mono_plane = mono_buffer.chan_mut(0);
 
