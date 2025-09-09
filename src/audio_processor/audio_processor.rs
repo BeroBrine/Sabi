@@ -90,8 +90,7 @@ impl AudioProcessor {
         let left_channel = stereo_buffer.chan(0);
         let right_channel = stereo_buffer.chan(1);
 
-        // const RATE: u32 = 22050;
-        //INFO: the resampling will be done later using rubato
+        //INFO: i will implement the resampling algorithm myself (🤡).
 
         let mono_spec = SignalSpec::new(stereo_buffer.spec().rate, Channels::FRONT_LEFT);
 
