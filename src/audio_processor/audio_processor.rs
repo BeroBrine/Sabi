@@ -1,7 +1,7 @@
 use std::env;
 use std::fs::File;
 
-use symphonia::core::audio::{AudioBuffer, Channels, Signal, SignalSpec};
+use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
@@ -79,48 +79,22 @@ impl AudioProcessor {
             };
 
             let decoded_packet = decoder.decode(&packet).unwrap();
+            let num_channels = decoded_packet.spec().channels.count();
 
-            let mut stereo_buffer =
-                AudioBuffer::<f32>::new(decoded_packet.capacity() as u64, *decoded_packet.spec());
+            let mut sample_buf =
+                SampleBuffer::<f32>::new(decoded_packet.capacity() as u64, *decoded_packet.spec());
+            sample_buf.copy_interleaved_ref(decoded_packet);
 
-            // fills the audio buffer with the packet.
-            decoded_packet.convert(&mut stereo_buffer);
-
-            let mono_buffer = self.convert_stereo_to_mono(stereo_buffer);
-
-            decoded_audio_samples.push(mono_buffer.frames() as f32);
+            // --- THE FIX IS HERE ---
+            // Instead of pushing the number of frames, we extend the vector with the actual samples.
+            for i in (0..sample_buf.len()).step_by(num_channels) {
+                let frame = &sample_buf.samples()[i..i + num_channels];
+                let mono_sample = frame.iter().sum::<f32>() / num_channels as f32;
+                decoded_audio_samples.push(mono_sample);
+            }
         }
 
         Ok((decoded_audio_samples, sample_rate))
-    }
-
-    fn convert_stereo_to_mono(&self, stereo_buffer: AudioBuffer<f32>) -> AudioBuffer<f32> {
-        if stereo_buffer.spec().channels.count() != 2 {
-            panic!("The buffer must be stereo to convert");
-        }
-
-        let left_channel = stereo_buffer.chan(0);
-        let right_channel = stereo_buffer.chan(1);
-
-        //INFO: i will implement the resampling algorithm myself (🤡).
-
-        let mono_spec = SignalSpec::new(stereo_buffer.spec().rate, Channels::FRONT_LEFT);
-
-        let mut mono_buffer = AudioBuffer::<f32>::new(stereo_buffer.capacity() as u64, mono_spec);
-        mono_buffer.render_reserved(Some(stereo_buffer.frames()));
-
-        let mono_plane = mono_buffer.chan_mut(0);
-
-        for i in 0..stereo_buffer.frames() {
-            let left_audio = left_channel[i];
-            let right_audio = right_channel[i];
-
-            let averaged_mono_audio = (left_audio + right_audio) * 0.5;
-
-            mono_plane[i] = averaged_mono_audio;
-        }
-
-        mono_buffer
     }
 
     fn read_return_file(&self) -> File {

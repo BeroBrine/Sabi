@@ -92,11 +92,12 @@ impl CooleyTukeyFFT {
         &self,
         buffer: Vec<f32>,
         sample_rate: u32,
-    ) -> Vec<(u32, Vec<(f32, f32)>)> {
+    ) -> Vec<(f32, Vec<(f32, f32)>)> {
         let buf_len = buffer.len();
         let mut position = 0;
 
         let mut fingerprints = Vec::new();
+        println!("The buf len is {} ", buf_len);
 
         while position + self.CHUNK_SIZE <= buf_len {
             let chunk = &buffer[position..position + self.CHUNK_SIZE];
@@ -107,7 +108,7 @@ impl CooleyTukeyFFT {
 
             let peaks = self.find_peaks(&fft_output, sample_rate);
 
-            let time = position as u32 / sample_rate;
+            let time = position as f32 / sample_rate as f32;
 
             fingerprints.push((time, peaks));
 
@@ -158,7 +159,7 @@ impl Default for CooleyTukeyFFT {
     fn default() -> Self {
         Self {
             CHUNK_SIZE: 4096,
-            OVERLAP_SIZE: 1024,
+            OVERLAP_SIZE: 2048,
         }
     }
 }
