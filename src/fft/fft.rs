@@ -1,8 +1,19 @@
-use std::f32::consts::PI;
+use ordered_float::OrderedFloat;
 
 use crate::fft::complex::Complex;
+use std::f32::consts::PI;
 
-#[allow(dead_code, non_snake_case)]
+pub struct FFTDistribution {
+    pub time: OrderedFloat<f32>,
+    pub peaks: Vec<PeakInfo>,
+}
+
+pub struct PeakInfo {
+    pub freq: OrderedFloat<f32>,
+    pub magnitude: OrderedFloat<f32>,
+}
+
+#[allow(non_snake_case)]
 pub struct CooleyTukeyFFT {
     CHUNK_SIZE: usize,
     OVERLAP_SIZE: usize,
@@ -29,7 +40,7 @@ impl CooleyTukeyFFT {
             .map(|(i, &sample)| {
                 let num = 2.0 * PI * (i as f32);
                 let denom = (n as f32) - 1.0;
-                //window function formula =  w[n] = 0.5 *  cos( 1 - ( (2 * PI * i) / (n - 1) ) )
+                // window function formula =  w[n] = 0.5 *  cos( 1 - ( (2 * PI * i) / (n - 1) ) )
                 let multiplier = 0.5 * (1.0 - (num / denom)).cos();
                 sample * multiplier
             })
@@ -60,7 +71,7 @@ impl CooleyTukeyFFT {
         // Basically to evaluate the audio signal for many sine and cosine waves (fourier transform)
         // Cooley Tukey helps by halving the computation by breaking the parts into even and odd
         // evaluation
-
+        //
         // P(ω)  = Pₑ(ω²) + ωPₒ(ω²)
         // P(-ω) = Pₑ(ω²) - ωPₒ(ω²)
         // where ω = e^i(2π/n) = cos(theta) + i·sin(theta) where theta = 2πk/n // euler's formula
@@ -68,9 +79,9 @@ impl CooleyTukeyFFT {
 
         for j in 0..n / 2 {
             let theta = (2.0 * PI * (j as f32)) / (n as f32);
-            // negative theta is the convention to write for forward fft. (evaluation)
 
             // from_polar handles the conversion of euler's formula to complex numbers
+            // negative theta is the convention to write for forward fft. (evaluation)
             let omega = Complex::from_polar(1.00, -theta);
 
             // positive evaluation
@@ -88,11 +99,11 @@ impl CooleyTukeyFFT {
         complex_buff
     }
 
-    pub fn fingerprint_audio(
+    pub fn generate_freq_time_distribution(
         &self,
         buffer: Vec<f32>,
         sample_rate: u32,
-    ) -> Vec<(f32, Vec<(f32, f32)>)> {
+    ) -> Vec<FFTDistribution> {
         let buf_len = buffer.len();
         let mut position = 0;
 
@@ -102,7 +113,8 @@ impl CooleyTukeyFFT {
         while position + self.CHUNK_SIZE <= buf_len {
             let chunk = &buffer[position..position + self.CHUNK_SIZE];
 
-            let windowed_chunk = self.apply_hann_window(chunk);
+            // let windowed_chunk = self.apply_hann_window(chunk);
+            let windowed_chunk: Vec<f32> = chunk.iter().map(|&c| c.clone()).collect();
 
             let fft_output = self.perform_fft(windowed_chunk);
 
@@ -110,7 +122,12 @@ impl CooleyTukeyFFT {
 
             let time = position as f32 / sample_rate as f32;
 
-            fingerprints.push((time, peaks));
+            let fingerprint = FFTDistribution {
+                time: OrderedFloat(time),
+                peaks: peaks,
+            };
+
+            fingerprints.push(fingerprint);
 
             position += self.CHUNK_SIZE - self.OVERLAP_SIZE;
         }
@@ -118,7 +135,7 @@ impl CooleyTukeyFFT {
         fingerprints
     }
 
-    fn find_peaks(&self, complex_buffer: &[Complex], sample_rate: u32) -> Vec<(f32, f32)> {
+    fn find_peaks(&self, complex_buffer: &[Complex], sample_rate: u32) -> Vec<PeakInfo> {
         let n = complex_buffer.len();
         let half_n = n / 2;
 
@@ -127,20 +144,27 @@ impl CooleyTukeyFFT {
             .map(|&c| c.norm_sqr().sqrt())
             .collect();
 
-        let mut peaks: Vec<(f32, f32)> = Vec::new();
+        let mut peaks = Vec::new();
 
         for i in 1..half_n - 1 {
             if magnitudes[i - 1] < magnitudes[i] && magnitudes[i] > magnitudes[i + 1] {
                 let freq = i as f32 * (sample_rate as f32 / n as f32);
 
                 // music frequency
-                if 300.0 < freq && freq < 20.0 * 1000.0 {
-                    peaks.push((freq, magnitudes[i]));
+                let lower_freq_limit = FreqRange::Low.get_freq();
+
+                let higher_freq_limit = FreqRange::High.get_freq();
+
+                if lower_freq_limit < freq && freq < higher_freq_limit {
+                    peaks.push(PeakInfo {
+                        freq: OrderedFloat(freq),
+                        magnitude: OrderedFloat(magnitudes[i]),
+                    });
                 }
             }
         }
 
-        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        peaks.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
 
         peaks.truncate(5);
 
@@ -152,6 +176,20 @@ impl CooleyTukeyFFT {
             .iter()
             .map(|&sample| Complex::new(sample, 0.0))
             .collect()
+    }
+}
+
+pub enum FreqRange {
+    Low,
+    High,
+}
+
+impl FreqRange {
+    pub fn get_freq(&self) -> f32 {
+        match self {
+            FreqRange::Low => 20.0,
+            FreqRange::High => 5_000.0,
+        }
     }
 }
 
