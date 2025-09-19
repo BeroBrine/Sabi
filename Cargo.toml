@@ -1,0 +1,16 @@
+[package]
+name = "sabi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+axum = "0.8.4"
+clap = { version = "4.5.47", features = ["derive"] }
+cpal = "0.16.0"
+diesel = { version = "2.3.1", features = ["postgres"] }
+dotenvy = "0.15.7"
+ordered-float = "5.0.0"
+sha256 = "1.6.0"
+symphonia = { version = "0.5.4", features = ["all-codecs"] }
+tokio = { version = "1.47.1", features = ["full"] }

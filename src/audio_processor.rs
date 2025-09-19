@@ -1,0 +1,210 @@
+use std::fs::File;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+use std::{env, thread};
+
+use cpal::{Devices, SampleRate, StreamConfig};
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
+use symphonia::core::errors::Error;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::{Hint, Probe};
+use symphonia::default;
+
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+pub struct AudioProcessor {
+    codec_registry: &'static CodecRegistry,
+    format_options: FormatOptions,
+    metadata_options: MetadataOptions,
+    probe: &'static Probe,
+}
+
+impl AudioProcessor {
+    pub fn new() -> Self {
+        Self {
+            codec_registry: default::get_codecs(),
+            format_options: FormatOptions::default(),
+            metadata_options: MetadataOptions::default(),
+            probe: symphonia::default::get_probe(),
+        }
+    }
+
+    pub fn get_decoded_audio(&self, file_name: String) -> (Vec<f32>, u32) {
+        let file = self.read_return_file(file_name);
+        let (decoded_audio_samples, sample_rate) = match self.generate_audio_samples(file) {
+            Ok(k) => k,
+            Err(e) => {
+                panic!("Generating audio samples failed \n {}", e);
+            }
+        };
+
+        (decoded_audio_samples, sample_rate)
+    }
+
+    fn generate_audio_samples(
+        &self,
+        file: File,
+    ) -> Result<(Vec<f32>, u32), Box<dyn std::error::Error>> {
+        let source: Box<dyn MediaSource> = Box::new(file);
+
+        let track = MediaSourceStream::new(source, Default::default());
+
+        let prober = self
+            .probe
+            .format(
+                &Hint::new(),
+                track,
+                &self.format_options,
+                &self.metadata_options,
+            )
+            .expect("an error has occurred while probing");
+        let mut format = prober.format;
+
+        println!("{:?}", format.tracks());
+        let codec_params = &format.tracks().get(0).unwrap().codec_params;
+        let sample_rate = codec_params.sample_rate.unwrap();
+        let decoder_options = DecoderOptions::default();
+
+        println!("the decoded type is {} ", codec_params.codec);
+        let mut decoder = self
+            .codec_registry
+            .make(codec_params, &decoder_options)
+            .unwrap();
+
+        let mut decoded_audio_samples = Vec::new();
+        loop {
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                // EOF
+                Err(Error::IoError(_)) => {
+                    break;
+                }
+                Err(e) => return Err(Box::new(e)),
+            };
+
+            let decoded_packet = decoder.decode(&packet).unwrap();
+            let num_channels = decoded_packet.spec().channels.count();
+
+            let mut sample_buf =
+                SampleBuffer::<f32>::new(decoded_packet.capacity() as u64, *decoded_packet.spec());
+            sample_buf.copy_interleaved_ref(decoded_packet);
+
+            // --- THE FIX IS HERE ---
+            // Instead of pushing the number of frames, we extend the vector with the actual samples.
+            for i in (0..sample_buf.len()).step_by(num_channels) {
+                let frame = &sample_buf.samples()[i..i + num_channels];
+                let mono_sample = frame.iter().sum::<f32>() / num_channels as f32;
+                decoded_audio_samples.push(mono_sample);
+            }
+        }
+
+        Ok((decoded_audio_samples, sample_rate))
+    }
+
+    fn read_return_file(&self, file_path: String) -> File {
+        let file = File::open(file_path).unwrap();
+        println!("read the file");
+        file
+    }
+
+    /// **RECORDS** audio from the default microphone for a set duration.
+    /// It returns the raw audio samples and the configuration used to record them.
+    pub fn record_audio(&self, duration_secs: u64) -> (Vec<f32>, StreamConfig) {
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .expect("No input device available.");
+
+        // Use the default input config.
+        let config = device
+            .default_input_config()
+            .expect("Failed to get default input config")
+            .config();
+
+        println!("Input config: {:?}", config);
+
+        // A channel is used to send audio data from the audio thread to the main thread.
+        let (tx, rx) = mpsc::channel();
+
+        // Build the input stream.
+        let stream = device
+            .build_input_stream(
+                &config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    // This closure is called with audio data. We send it to our channel.
+                    if tx.send(data.to_vec()).is_err() {
+                        // The receiver has been dropped, so we can't send data.
+                        // This might happen if the recording stops.
+                    }
+                },
+                |err| eprintln!("An error occurred on the input stream: {}", err),
+                None,
+            )
+            .expect("Failed to build input stream.");
+
+        stream.play().unwrap();
+
+        println!("🎤 Recording for {} seconds...", duration_secs);
+
+        // Receive the audio data from the channel for the specified duration.
+        let recording_start = Instant::now();
+        let mut recorded_samples = Vec::new();
+        while recording_start.elapsed() < Duration::from_secs(duration_secs) {
+            // try_recv is non-blocking
+            if let Ok(data_chunk) = rx.try_recv() {
+                recorded_samples.extend_from_slice(&data_chunk);
+            }
+        }
+
+        // The stream is dropped here, which stops the recording.
+        println!(
+            "✅ Recording finished. Captured {} samples.",
+            recorded_samples.len()
+        );
+
+        (recorded_samples, config)
+    }
+
+    /// **PLAYS** the audio samples that were just recorded.
+    /// It takes the samples and the config to ensure playback is accurate.
+    pub fn play_recording(&self, recorded_samples: Vec<f32>, config: &StreamConfig) {
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .expect("No output device available.");
+
+        // We use the *exact same config* from the recording to ensure correct playback.
+        println!("Output config: {:?}", config);
+
+        //
+        let duration_secs =
+            recorded_samples.len() as f32 / (config.sample_rate.0 as f32 * config.channels as f32);
+
+        // An iterator allows us to consume the samples one by one in the callback.
+        let mut samples_iter = recorded_samples.into_iter();
+
+        let stream = device
+            .build_output_stream(
+                config,
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    // Fill the output buffer with our recorded samples.
+                    for sample in data.iter_mut() {
+                        *sample = samples_iter.next().unwrap_or(0.0);
+                    }
+                },
+                |err| eprintln!("An error occurred on the output stream: {}", err),
+                None,
+            )
+            .expect("Failed to build output stream.");
+
+        stream.play().unwrap();
+
+        // Keep the main thread alive for the duration of the playback.
+        println!("🎵 Playing back for {:.2} seconds...", duration_secs);
+        thread::sleep(Duration::from_secs_f32(duration_secs + 1.0));
+        println!("Playback finished.");
+    }
+}
