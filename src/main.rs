@@ -47,11 +47,13 @@ fn main() {
     let args = Args::parse();
 
     if args.ingest {
-        if let Some(file) = args.file {
-            ingest_file(file);
-        } else {
-            eprintln!("Error: --ingest requires --file <path>");
-            std::process::exit(1);
+        if args.ingest {
+            if let Some(file) = args.file {
+                ingest_file(file);
+            } else {
+                eprintln!("Error: --ingest requires --file <path>");
+                std::process::exit(1);
+            }
         }
     } else if args.recognise {
         ingest_audio();
@@ -89,6 +91,7 @@ fn batch_test(songs_dir: String) {
             }
             let file_path = path.to_string_lossy().to_string();
 
+            println!("the file path is {}", file_path);
             // Song name
             let song_name = path.file_name().unwrap().to_string_lossy().to_string();
 
@@ -280,15 +283,15 @@ fn ingest_audio() {
     let (recorded_samples, config) = audio_processor.record_audio(recording_time_duration);
 
     println!("Playback recorded audio...");
-    audio_processor.play_recording(recorded_samples.clone(), &config);
+    audio_processor.play_recording(recorded_samples.clone(), &config.clone().into());
 
     // Compute FFT time-frequency distribution
     let fft = CooleyTukeyFFT::default();
     // Resample recorded audio to target sample rate used in decoder for consistency
     let target_sr = AudioProcessor::TARGET_SAMPLE_RATE;
-    let rec_resampled = if config.sample_rate.0 != target_sr {
+    let rec_resampled = if config.sample_rate().0 != target_sr {
         let out =
-            audio_processor.resample_linear(&recorded_samples, config.sample_rate.0, target_sr);
+            audio_processor.resample_linear(&recorded_samples, config.sample_rate().0, target_sr);
 
         out
     } else {

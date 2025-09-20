@@ -1,9 +1,9 @@
 use std::fs::File;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
-use cpal::{Devices, SampleRate, StreamConfig};
+use cpal::{Devices, SampleRate, StreamConfig, SupportedStreamConfig};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CodecRegistry, DecoderOptions};
 use symphonia::core::errors::Error;
@@ -114,60 +114,62 @@ impl AudioProcessor {
 
     /// **RECORDS** audio from the default microphone for a set duration.
     /// It returns the raw audio samples and the configuration used to record them.
-    pub fn record_audio(&self, duration_secs: u64) -> (Vec<f32>, StreamConfig) {
+    pub fn record_audio(&self, duration_secs: u64) -> (Vec<f32>, SupportedStreamConfig) {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .expect("No input device available.");
+        let device = host.default_input_device().expect("No input device found");
+        let config_cpal = device.default_input_config().unwrap();
 
-        // Use the default input config.
-        let config = device
-            .default_input_config()
-            .expect("Failed to get default input config")
-            .config();
+        let sample_rate = config_cpal.sample_rate().0;
+        let channels = config_cpal.channels();
 
-        println!("Input config: {:?}", config);
+        // Shared vector for thread-safe access
+        let recorded_samples = Arc::new(Mutex::new(Vec::new()));
+        let samples_clone = recorded_samples.clone();
 
-        // A channel is used to send audio data from the audio thread to the main thread.
-        let (tx, rx) = mpsc::channel();
+        let err_fn = |err| eprintln!("Stream error: {}", err);
 
-        // Build the input stream.
-        let stream = device
-            .build_input_stream(
-                &config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    // This closure is called with audio data. We send it to our channel.
-                    if tx.send(data.to_vec()).is_err() {
-                        // The receiver has been dropped, so we can't send data.
-                        // This might happen if the recording stops.
-                    }
-                },
-                |err| eprintln!("An error occurred on the input stream: {}", err),
-                None,
-            )
-            .expect("Failed to build input stream.");
+        let stream = match config_cpal.sample_format() {
+            cpal::SampleFormat::F32 => device
+                .build_input_stream(
+                    &config_cpal.clone().into(),
+                    move |data: &[f32], _: &_| {
+                        let mut samples = samples_clone.lock().unwrap();
+                        for frame in data.chunks(channels as usize) {
+                            let mono = frame.iter().sum::<f32>() / channels as f32;
+                            samples.push(mono);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .unwrap(),
+            cpal::SampleFormat::I16 => device
+                .build_input_stream(
+                    &config_cpal.clone().into(),
+                    move |data: &[i16], _: &_| {
+                        let mut samples = samples_clone.lock().unwrap();
+                        for frame in data.chunks(channels as usize) {
+                            let mono = frame
+                                .iter()
+                                .map(|s| *s as f32 / i16::MAX as f32)
+                                .sum::<f32>()
+                                / channels as f32;
+                            samples.push(mono);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .unwrap(),
+            _ => panic!("Unsupported sample format"),
+        };
 
         stream.play().unwrap();
+        thread::sleep(Duration::from_secs(duration_secs));
+        drop(stream);
 
-        println!("🎤 Recording for {} seconds...", duration_secs);
-
-        // Receive the audio data from the channel for the specified duration.
-        let recording_start = Instant::now();
-        let mut recorded_samples = Vec::new();
-        while recording_start.elapsed() < Duration::from_secs(duration_secs) {
-            // try_recv is non-blocking
-            if let Ok(data_chunk) = rx.try_recv() {
-                recorded_samples.extend_from_slice(&data_chunk);
-            }
-        }
-
-        // The stream is dropped here, which stops the recording.
-        println!(
-            "✅ Recording finished. Captured {} samples.",
-            recorded_samples.len()
-        );
-
-        (recorded_samples, config)
+        // Return a copy of the recorded samples
+        (recorded_samples.lock().unwrap().clone(), config_cpal)
     }
 
     /// **PLAYS** the audio samples that were just recorded.
