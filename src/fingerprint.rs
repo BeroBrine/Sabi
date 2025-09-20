@@ -50,33 +50,33 @@ pub fn generate_audio_fingerprint(fft_buffer: &Vec<FFTDistribution>) -> Vec<Fing
             }
 
             // Iterate through only the chunks within our defined target zone
+            // src/fingerprint.rs
+
+            // ... (inside generate_audio_fingerprint)
             for slice in &fft_buffer[start_idx..end_idx] {
                 for target_peak in &slice.peaks {
                     let freq_2 = target_peak.freq.into_inner();
                     let time_delta = slice.time.into_inner() - time;
 
-                    // Use bit-packing exactly like Go version
-                    let anchor_freq_int = anchor_freq as i32; // real part of complex frequency
-                    let target_freq_int = freq_2 as i32; // real part of complex frequency
+                    let anchor_freq_int = anchor_freq as i32;
+                    let target_freq_int = freq_2 as i32;
                     let delta_ms = ((time_delta * 1000.0) as u32).min(16383); // 14 bits max
-                    
-                    // Debug: Print some values
-                    if fingerprints.len() < 3 {
-                        println!("Fingerprint {}: anchor_freq={}, target_freq={}, delta_ms={}", 
-                                fingerprints.len(), anchor_freq_int, target_freq_int, delta_ms);
-                    }
-                    
-                    // Bit-packing exactly like Go: anchorFreq<<23 | targetFreq<<14 | deltaMs
-                    let hashed_value = (anchor_freq_int as u32) << 23 | (target_freq_int as u32) << 14 | delta_ms;
+
+                    // CORRECTED HASHING: Use u64 and allocate more bits for frequencies
+                    // 16 bits for anchor_freq, 16 bits for target_freq, 14 bits for delta_ms
+                    let hashed_value = (anchor_freq_int as u64) << 30
+                        | (target_freq_int as u64) << 14
+                        | delta_ms as u64;
 
                     let song_info = FingerprintInfo {
-                        hash: hashed_value as u64,
+                        hash: hashed_value, // hash is now u64
                         abs_anchor_tm_offset: time,
-                        song_id: 1,
+                        song_id: 1, // You might want to pass the actual song ID here
                     };
                     fingerprints.push(song_info);
                 }
             }
+            // ...
         }
     }
     fingerprints
@@ -103,11 +103,12 @@ pub fn vote_best_matches(
 
     // Collect all matches: song_id -> [(query_time, db_time)]
     let mut matches: HashMap<u32, Vec<(f32, f32)>> = HashMap::new();
-    
+
     for fp in query_fingerprints.iter() {
         if let Some(db_matches) = db_matches_by_hash.get(&fp.hash) {
             for &(song_id, db_time) in db_matches.iter() {
-                matches.entry(song_id)
+                matches
+                    .entry(song_id)
                     .or_insert_with(Vec::new)
                     .push((fp.abs_anchor_tm_offset, db_time));
             }
@@ -116,41 +117,42 @@ pub fn vote_best_matches(
 
     // Match Go's analyzeRelativeTiming exactly - O(n²) pairwise comparison
     let mut scores: HashMap<u32, (f64, f32)> = HashMap::new(); // (score, time_offset)
-    
+
     for (song_id, times) in matches.iter() {
         if times.is_empty() {
             scores.insert(*song_id, (0.0, 0.0));
             continue;
         }
-        
+
         // Calculate time offset for display (simple average)
         let mut total_offset = 0.0;
         for (sample_time, db_time) in times.iter() {
             total_offset += db_time - sample_time;
         }
         let avg_time_offset = total_offset / times.len() as f32;
-        
+
         // Match Go's analyzeRelativeTiming exactly
         let mut count = 0;
         for i in 0..times.len() {
             for j in (i + 1)..times.len() {
                 let sample_diff = (times[i].0 - times[j].0).abs();
                 let db_diff = (times[i].1 - times[j].1).abs();
-                if (sample_diff - db_diff).abs() < 0.1 { // 100ms tolerance like Go
+                if (sample_diff - db_diff).abs() < 0.1 {
+                    // 100ms tolerance like Go
                     count += 1;
                 }
             }
         }
-        
+
         scores.insert(*song_id, (count as f64, avg_time_offset));
     }
 
     let mut scored: Vec<VoteResult> = scores
         .into_iter()
-        .map(|(song_id, (score, time_offset))| VoteResult { 
-            song_id, 
+        .map(|(song_id, (score, time_offset))| VoteResult {
+            song_id,
             score: score as usize,
-            time_offset
+            time_offset,
         })
         .collect();
 

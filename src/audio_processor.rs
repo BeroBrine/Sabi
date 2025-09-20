@@ -23,6 +23,8 @@ pub struct AudioProcessor {
 }
 
 impl AudioProcessor {
+    pub const TARGET_SAMPLE_RATE: u32 = 11025;
+
     pub fn new() -> Self {
         Self {
             codec_registry: default::get_codecs(),
@@ -206,5 +208,31 @@ impl AudioProcessor {
         println!("🎵 Playing back for {:.2} seconds...", duration_secs);
         thread::sleep(Duration::from_secs_f32(duration_secs + 1.0));
         println!("Playback finished.");
+    }
+    pub fn resample_linear(&self, samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+        if from_rate == to_rate {
+            return samples.to_vec();
+        }
+        let ratio = from_rate as f64 / to_rate as f64;
+        let new_len = (samples.len() as f64 / ratio) as usize;
+        let mut resampled = Vec::with_capacity(new_len);
+
+        for i in 0..new_len {
+            let in_idx_float = i as f64 * ratio;
+            let in_idx_int = in_idx_float.floor() as usize;
+            let frac = in_idx_float.fract() as f32;
+
+            if in_idx_int + 1 < samples.len() {
+                let p1 = samples[in_idx_int];
+                let p2 = samples[in_idx_int + 1];
+                let interpolated = p1 + frac * (p2 - p1);
+                resampled.push(interpolated);
+            } else if in_idx_int < samples.len() {
+                resampled.push(samples[in_idx_int]);
+            } else {
+                break;
+            }
+        }
+        resampled
     }
 }

@@ -39,7 +39,7 @@ impl std::ops::Mul for Complex {
         // (a + bi)*(c + di) => (ac - bd) + i(ad + bc)
         Complex {
             re: self.re * rhs.re - self.im * rhs.im,
-            im: self.im * rhs.re + self.im * rhs.re,
+            im: self.re * rhs.im + self.im * rhs.re,
         }
     }
 }

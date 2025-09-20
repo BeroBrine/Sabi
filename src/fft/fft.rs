@@ -113,8 +113,7 @@ impl CooleyTukeyFFT {
         while position + self.CHUNK_SIZE <= buf_len {
             let chunk = &buffer[position..position + self.CHUNK_SIZE];
 
-            // let windowed_chunk = self.apply_hann_window(chunk);
-            let windowed_chunk: Vec<f32> = chunk.iter().map(|&c| c.clone()).collect();
+            let windowed_chunk = self.apply_hann_window(chunk);
 
             let fft_output = self.perform_fft(windowed_chunk);
 

@@ -73,10 +73,15 @@ fn ingest_file(file_name: String) {
     );
 
     // Apply 4x downsampling like Go (dspRatio = 4)
-    let downsampled = audio_processor.resample_linear(&audio_samples, sample_rate, sample_rate / 4);
+    let downsampled = audio_processor.resample_linear(
+        &audio_samples,
+        sample_rate,
+        AudioProcessor::TARGET_SAMPLE_RATE,
+    );
 
     // Compute FFT time-frequency distribution
-    let fft_distribution = fft.generate_freq_time_distribution(downsampled, sample_rate / 4);
+    let fft_distribution =
+        fft.generate_freq_time_distribution(downsampled, AudioProcessor::TARGET_SAMPLE_RATE);
 
     // Generate fingerprints
     let fingerprints = generate_audio_fingerprint(&fft_distribution);
@@ -120,9 +125,14 @@ fn ingest_audio() {
     };
 
     // Apply 4x downsampling like Go (dspRatio = 4)
-    let downsampled = audio_processor.resample_linear(&rec_resampled, target_sr, target_sr / 4);
+    let downsampled = audio_processor.resample_linear(
+        &rec_resampled,
+        target_sr,
+        AudioProcessor::TARGET_SAMPLE_RATE,
+    );
 
-    let fft_distribution = fft.generate_freq_time_distribution(downsampled, target_sr / 4);
+    let fft_distribution =
+        fft.generate_freq_time_distribution(downsampled, AudioProcessor::TARGET_SAMPLE_RATE);
 
     // Generate fingerprints
     let fingerprints = generate_audio_fingerprint(&fft_distribution);
