@@ -29,7 +29,7 @@ SONGS_DIR="songs"
 
 # How long the audio snippet should be (in seconds).
 # This should match the recording duration in your Rust app.
-SNIPPET_DURATION=6
+SNIPPET_DURATION=8
 
 # How many seconds to skip at the beginning of the song to avoid silence/intros.
 START_MARGIN=10

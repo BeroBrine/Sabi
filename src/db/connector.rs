@@ -45,16 +45,24 @@ impl DB {
 
         const BATCH_SIZE: usize = 5000;
 
+        // --- Deduplicate (hash, time) per song ---
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
         let mut fingerprints: Vec<Fingerprint> = Vec::new();
 
         for f_info in fingerprint_info {
-            let fpt = Fingerprint {
-                hash: f_info.hash as i64,
-                absolute_time_offset: f_info.abs_anchor_tm_offset as f64,
-                song_id: _song_id,
-                created_at: Some(SystemTime::now()),
-            };
-            fingerprints.push(fpt);
+            let key = (
+                f_info.hash,
+                (f_info.abs_anchor_tm_offset * 100.0).round() as i64,
+            ); // bucket time
+            if seen.insert(key) {
+                fingerprints.push(Fingerprint {
+                    hash: f_info.hash as i64,
+                    absolute_time_offset: f_info.abs_anchor_tm_offset as f64,
+                    song_id: _song_id,
+                    created_at: Some(SystemTime::now()),
+                });
+            }
         }
 
         let mut all_inserted_records = Vec::new();
@@ -74,11 +82,10 @@ impl DB {
         });
 
         match result {
-            Ok(records) => println!("Succesfully inserted {} total records", records.len()),
+            Ok(records) => println!("Successfully inserted {} total records", records.len()),
             Err(e) => eprintln!("Transaction failed {:?} ", e),
         }
     }
-
     pub fn fetch_matches_grouped_by_hash(
         &mut self,
         hashes_in: &Vec<i64>,

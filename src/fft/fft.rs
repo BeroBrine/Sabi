@@ -8,6 +8,7 @@ pub struct FFTDistribution {
     pub peaks: Vec<PeakInfo>,
 }
 
+#[derive(Clone)]
 pub struct PeakInfo {
     pub freq: OrderedFloat<f32>,
     pub magnitude: OrderedFloat<f32>,
@@ -138,24 +139,32 @@ impl CooleyTukeyFFT {
         let n = complex_buffer.len();
         let half_n = n / 2;
 
-        let magnitudes: Vec<f32> = complex_buffer[..half_n]
+        // Compute magnitudes
+        let mut magnitudes: Vec<f32> = complex_buffer[..half_n]
             .iter()
             .map(|&c| c.norm_sqr().sqrt())
             .collect();
 
-        let mut peaks = Vec::new();
+        // --- Normalize magnitudes per frame ---
+        if let Some(&max_val) = magnitudes.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            if max_val > 0.0 {
+                for m in &mut magnitudes {
+                    *m /= max_val;
+                }
+            }
+        }
+
+        let mut raw_peaks = Vec::new();
 
         for i in 1..half_n - 1 {
             if magnitudes[i - 1] < magnitudes[i] && magnitudes[i] > magnitudes[i + 1] {
                 let freq = i as f32 * (sample_rate as f32 / n as f32);
 
-                // music frequency
                 let lower_freq_limit = FreqRange::Low.get_freq();
-
                 let higher_freq_limit = FreqRange::High.get_freq();
 
                 if lower_freq_limit < freq && freq < higher_freq_limit {
-                    peaks.push(PeakInfo {
+                    raw_peaks.push(PeakInfo {
                         freq: OrderedFloat(freq),
                         magnitude: OrderedFloat(magnitudes[i]),
                     });
@@ -163,13 +172,38 @@ impl CooleyTukeyFFT {
             }
         }
 
-        peaks.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+        // --- Band splitting ---
+        let mut low_band: Vec<PeakInfo> = raw_peaks
+            .iter()
+            .filter(|p| (20.0..300.0).contains(&p.freq.into_inner()))
+            .cloned()
+            .collect();
 
-        peaks.truncate(5);
+        let mut mid_band: Vec<PeakInfo> = raw_peaks
+            .iter()
+            .filter(|p| (300.0..2000.0).contains(&p.freq.into_inner()))
+            .cloned()
+            .collect();
 
-        peaks
+        let mut high_band: Vec<PeakInfo> = raw_peaks
+            .iter()
+            .filter(|p| (2000.0..5000.0).contains(&p.freq.into_inner()))
+            .cloned()
+            .collect();
+
+        // Sort by magnitude
+        low_band.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+        mid_band.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+        high_band.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+
+        // --- Take more peaks per band for density ---
+        let mut final_peaks = Vec::new();
+        final_peaks.extend(low_band.into_iter().take(2)); // 2 from low
+        final_peaks.extend(mid_band.into_iter().take(3)); // 3 from mid
+        final_peaks.extend(high_band.into_iter().take(3)); // 3 from high
+
+        final_peaks
     }
-
     fn convert_to_complex_buffer(&self, buffer: Vec<f32>) -> Vec<Complex> {
         buffer
             .iter()
@@ -194,9 +228,11 @@ impl FreqRange {
 
 impl Default for CooleyTukeyFFT {
     fn default() -> Self {
+        let chunk_size = 2048;
+        let overlap_size = chunk_size / 4;
         Self {
-            CHUNK_SIZE: 4096,
-            OVERLAP_SIZE: 2048,
+            CHUNK_SIZE: chunk_size,
+            OVERLAP_SIZE: overlap_size,
         }
     }
 }

@@ -1,24 +1,12 @@
-use crate::fft::fft::FFTDistribution; // Assuming this is your path
+use crate::fft::fft::FFTDistribution;
 use ordered_float::OrderedFloat;
-use std::{
-    collections::HashMap,
-    hash::{Hash, Hasher},
-};
-use twox_hash::XxHash3_64;
+use std::collections::HashMap;
 
-// --- TUNABLE PARAMETERS FOR BETTER ACCURACY ---
-/// How many FFT chunks to look ahead for pairing peaks.
-const MAX_TARGET_ZONE: usize = 5;
-/// How many FFT chunks to *skip* after the anchor chunk to find a target peak.
-/// This is the crucial change to create more distinctive hashes.
+/// Tunable parameters
+const MAX_TARGET_ZONE: usize = 60; // look ahead ~10s
 const MIN_TARGET_ZONE_DIST: usize = 1;
-
-#[derive(Hash, Debug)]
-struct Hashable {
-    freq_1: OrderedFloat<f32>,
-    freq_2: OrderedFloat<f32>,
-    time_delta: OrderedFloat<f32>,
-}
+const FREQ_STEP: f32 = 50.0; // coarser bins
+const DELTA_STEP: f32 = 0.1; // 100ms bins
 
 #[derive(Debug)]
 pub struct FingerprintInfo {
@@ -27,138 +15,114 @@ pub struct FingerprintInfo {
     pub song_id: u32,
 }
 
+#[derive(Debug)]
+pub struct VoteResult {
+    pub song_id: u32,
+    pub score: usize,
+    pub time_offset: f32,
+}
+
+/// Quantize a frequency in Hz into coarse bins
+fn quantize_freq(freq: f32) -> u32 {
+    (freq / FREQ_STEP).round() as u32
+}
+
+/// Quantize a time delta into coarse bins
+fn quantize_time_delta(delta: f32) -> u32 {
+    ((delta / DELTA_STEP).round() as u32).min(16383)
+}
+
+/// Generate fingerprints with quantization + fan-out
 pub fn generate_audio_fingerprint(fft_buffer: &Vec<FFTDistribution>) -> Vec<FingerprintInfo> {
     let buf_len = fft_buffer.len();
-    let mut fingerprints: Vec<FingerprintInfo> = Vec::new();
-
-    const FREQ_PRECISION: f32 = 1.0;
-    const TIME_PRECISION: f32 = 0.01;
+    let mut fingerprints = Vec::new();
 
     for (idx, fft_distribution) in fft_buffer.iter().enumerate() {
         let time = fft_distribution.time.into_inner();
-        let anchor_peaks = &fft_distribution.peaks;
 
-        for anchor_peak in anchor_peaks {
-            let anchor_freq = anchor_peak.freq.into_inner();
+        for anchor_peak in &fft_distribution.peaks {
+            let anchor_freq_bin = quantize_freq(anchor_peak.freq.into_inner());
 
-            // --- REVISED LOGIC: Define the start and end of the target zone ---
+            // look ahead within target zone
             let start_idx = idx + MIN_TARGET_ZONE_DIST;
-            let end_idx = (idx + MAX_TARGET_ZONE).min(buf_len); // Ensure we don't go out of bounds
+            let end_idx = (idx + MAX_TARGET_ZONE).min(buf_len);
 
             if start_idx >= end_idx {
                 continue;
             }
 
-            // Iterate through only the chunks within our defined target zone
-            // src/fingerprint.rs
-
-            // ... (inside generate_audio_fingerprint)
             for slice in &fft_buffer[start_idx..end_idx] {
+                let time_delta = slice.time.into_inner() - time;
+                if time_delta <= 0.0 {
+                    continue;
+                }
+                let delta_bin = quantize_time_delta(time_delta);
+
                 for target_peak in &slice.peaks {
-                    let freq_2 = target_peak.freq.into_inner();
-                    let time_delta = slice.time.into_inner() - time;
+                    let target_freq_bin = quantize_freq(target_peak.freq.into_inner());
 
-                    let anchor_freq_int = anchor_freq as i32;
-                    let target_freq_int = freq_2 as i32;
-                    let delta_ms = ((time_delta * 1000.0) as u32).min(16383); // 14 bits max
+                    // construct 64-bit hash
+                    let hash = (anchor_freq_bin as u64) << 30
+                        | (target_freq_bin as u64) << 14
+                        | (delta_bin as u64);
 
-                    // CORRECTED HASHING: Use u64 and allocate more bits for frequencies
-                    // 16 bits for anchor_freq, 16 bits for target_freq, 14 bits for delta_ms
-                    let hashed_value = (anchor_freq_int as u64) << 30
-                        | (target_freq_int as u64) << 14
-                        | delta_ms as u64;
-
-                    let song_info = FingerprintInfo {
-                        hash: hashed_value, // hash is now u64
+                    fingerprints.push(FingerprintInfo {
+                        hash,
                         abs_anchor_tm_offset: time,
-                        song_id: 1, // You might want to pass the actual song ID here
-                    };
-                    fingerprints.push(song_info);
+                        song_id: 1, // will be set properly when ingesting
+                    });
                 }
             }
-            // ...
         }
     }
+
     fingerprints
 }
 
-#[derive(Debug)]
-pub struct VoteResult {
-    pub song_id: u32,
-    pub score: usize,
-    pub time_offset: f32, // Time offset in seconds where the snippet occurs in the song
-}
-
-// The voting algorithm remains unchanged. Its accuracy depends on the quality
-// of the fingerprints, which we have now improved.
+/// Vote using histogram of offsets (robust Shazam-like approach)
 pub fn vote_best_matches(
     query_fingerprints: &[FingerprintInfo],
     db_matches_by_hash: &HashMap<u64, Vec<(u32, f32)>>,
-    _delta_bucket_secs: f32, // Not used in this implementation
     top_k: usize,
 ) -> Vec<VoteResult> {
     if query_fingerprints.is_empty() {
         return Vec::new();
     }
 
-    // Collect all matches: song_id -> [(query_time, db_time)]
-    let mut matches: HashMap<u32, Vec<(f32, f32)>> = HashMap::new();
+    // offset_histograms[song_id][offset_bin] = vote count
+    let mut offset_histograms: HashMap<u32, HashMap<i32, usize>> = HashMap::new();
 
-    for fp in query_fingerprints.iter() {
+    for fp in query_fingerprints {
         if let Some(db_matches) = db_matches_by_hash.get(&fp.hash) {
-            for &(song_id, db_time) in db_matches.iter() {
-                matches
+            for &(song_id, db_time) in db_matches {
+                let offset = db_time - fp.abs_anchor_tm_offset;
+                let offset_bin = (offset / 0.05).round() as i32; // 50 ms bins
+
+                *offset_histograms
                     .entry(song_id)
-                    .or_insert_with(Vec::new)
-                    .push((fp.abs_anchor_tm_offset, db_time));
+                    .or_default()
+                    .entry(offset_bin)
+                    .or_default() += 1;
             }
         }
     }
 
-    // Match Go's analyzeRelativeTiming exactly - O(n²) pairwise comparison
-    let mut scores: HashMap<u32, (f64, f32)> = HashMap::new(); // (score, time_offset)
-
-    for (song_id, times) in matches.iter() {
-        if times.is_empty() {
-            scores.insert(*song_id, (0.0, 0.0));
-            continue;
+    // For each song, take the offset bin with max votes
+    let mut results = Vec::new();
+    for (song_id, hist) in offset_histograms {
+        if let Some((&best_bin, &score)) = hist.iter().max_by_key(|&(_, &v)| v) {
+            results.push(VoteResult {
+                song_id,
+                score,
+                time_offset: best_bin as f32 * 0.05, // convert back to seconds
+            });
         }
-
-        // Calculate time offset for display (simple average)
-        let mut total_offset = 0.0;
-        for (sample_time, db_time) in times.iter() {
-            total_offset += db_time - sample_time;
-        }
-        let avg_time_offset = total_offset / times.len() as f32;
-
-        // Match Go's analyzeRelativeTiming exactly
-        let mut count = 0;
-        for i in 0..times.len() {
-            for j in (i + 1)..times.len() {
-                let sample_diff = (times[i].0 - times[j].0).abs();
-                let db_diff = (times[i].1 - times[j].1).abs();
-                if (sample_diff - db_diff).abs() < 0.1 {
-                    // 100ms tolerance like Go
-                    count += 1;
-                }
-            }
-        }
-
-        scores.insert(*song_id, (count as f64, avg_time_offset));
     }
 
-    let mut scored: Vec<VoteResult> = scores
-        .into_iter()
-        .map(|(song_id, (score, time_offset))| VoteResult {
-            song_id,
-            score: score as usize,
-            time_offset,
-        })
-        .collect();
-
-    scored.sort_by(|a, b| b.score.cmp(&a.score));
-    if scored.len() > top_k {
-        scored.truncate(top_k);
+    results.sort_by(|a, b| b.score.cmp(&a.score));
+    if results.len() > top_k {
+        results.truncate(top_k);
     }
-    scored
+
+    results
 }
