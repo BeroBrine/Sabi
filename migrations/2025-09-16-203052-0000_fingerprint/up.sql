@@ -11,7 +11,7 @@ CREATE TABLE fingerprint (
   absolute_time_offset FLOAT NOT NULL,
   song_id INT NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
   created_at TIMESTAMP DEFAULT NOW(),
-  PRIMARY KEY (song_id , absolute_time_offset)
+  PRIMARY KEY (song_id , absolute_time_offset , hash)
 );
 
 CREATE INDEX idx_fingerprint_hash ON fingerprint(hash);

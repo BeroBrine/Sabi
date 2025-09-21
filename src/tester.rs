@@ -16,8 +16,8 @@ pub fn run_random_snippet_test(songs_dir: &str) {
 
     let mut total_tests = 0;
     let mut correct_matches = 0;
-    const SNIPPETS_PER_SONG: u32 = 3;
-    const SNIPPET_DURATION_SECS: u64 = 10;
+    const SNIPPETS_PER_SONG: u32 = 4;
+    const SNIPPET_DURATION_SECS: u64 = 5;
     const SNIPPET_TEMP_PATH: &str = "temp_test_snippet.wav";
 
     println!("🎵 Starting random snippet test...");

@@ -28,7 +28,7 @@ do
     
     # 4. Execute the cargo command for the current file.
     # The double dash `--` separates cargo's arguments from your program's arguments.
-    cargo run -- --ingest --file "$song_file"
+    cargo run --release -- --ingest --file "$song_file"
     
     echo "" # Add a blank line for cleaner output
   fi

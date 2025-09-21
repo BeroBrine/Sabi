@@ -8,11 +8,12 @@ const MIN_TARGET_ZONE_DIST: usize = 1;
 const FREQ_STEP: f32 = 50.0; // coarser bins
 const DELTA_STEP: f32 = 0.1; // 100ms bins
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FingerprintInfo {
     pub hash: u64,
     pub abs_anchor_tm_offset: f32,
     pub song_id: u32,
+    pub strength: f32, // NEW FIELD
 }
 
 #[derive(Debug)]
@@ -31,6 +32,19 @@ fn quantize_freq(freq: f32) -> u32 {
 fn quantize_time_delta(delta: f32) -> u32 {
     ((delta / DELTA_STEP).round() as u32).min(16383)
 }
+
+/// Generate fingerprints with quantization + fan-out
+// src/fingerprint.rs
+
+// ... (use statements)
+
+// ... (const definitions)
+
+// MODIFIED STRUCT: Add a strength field
+
+// ... (VoteResult struct remains the same)
+
+// ... (quantize functions remain the same)
 
 /// Generate fingerprints with quantization + fan-out
 pub fn generate_audio_fingerprint(fft_buffer: &Vec<FFTDistribution>) -> Vec<FingerprintInfo> {
@@ -66,10 +80,16 @@ pub fn generate_audio_fingerprint(fft_buffer: &Vec<FFTDistribution>) -> Vec<Fing
                         | (target_freq_bin as u64) << 14
                         | (delta_bin as u64);
 
+                    // --- NEW: Calculate the strength of the fingerprint ---
+                    // A simple product of the peak magnitudes works well.
+                    let strength =
+                        anchor_peak.magnitude.into_inner() * target_peak.magnitude.into_inner();
+
                     fingerprints.push(FingerprintInfo {
                         hash,
                         abs_anchor_tm_offset: time,
                         song_id: 1, // will be set properly when ingesting
+                        strength,   // Store the calculated strength
                     });
                 }
             }
@@ -79,6 +99,7 @@ pub fn generate_audio_fingerprint(fft_buffer: &Vec<FFTDistribution>) -> Vec<Fing
     fingerprints
 }
 
+// ... (vote_best_matches function remains the same)
 /// Vote using histogram of offsets (robust Shazam-like approach)
 pub fn vote_best_matches(
     query_fingerprints: &[FingerprintInfo],

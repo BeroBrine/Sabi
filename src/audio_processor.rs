@@ -1,3 +1,4 @@
+use audio_gate::NoiseGate;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::fs::File;
@@ -121,6 +122,16 @@ impl AudioProcessor {
     // ...
 
     pub fn record_audio(&self, duration_secs: u64) -> (Vec<f32>, SupportedStreamConfig) {
+        let mut gate = NoiseGate::new(
+            -36.0,   // Open Threshold
+            -54.0,   // Close Treshold
+            48000.0, // Sample Rate
+            2,       // Channels
+            150.0,   // Release Rate
+            25.0,    // Attack Rate
+            150.0,   // Hold time
+        );
+
         let host = cpal::default_host();
         let device = host.default_input_device().expect("No input device found");
         let config_cpal = device.default_input_config().unwrap();
@@ -135,7 +146,6 @@ impl AudioProcessor {
                 .build_input_stream(
                     &config_cpal.clone().into(),
                     move |data: &[f32], _: &_| {
-                        // REMOVED mono conversion. Just copy all the raw samples.
                         samples_clone.lock().unwrap().extend_from_slice(data);
                     },
                     err_fn,

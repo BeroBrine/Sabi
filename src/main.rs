@@ -9,13 +9,7 @@ use crate::db::connector::DB;
 use crate::fingerprint::{generate_audio_fingerprint, vote_best_matches};
 use crate::{audio_processor::AudioProcessor, fft::fft::CooleyTukeyFFT};
 use clap::{ArgGroup, Parser};
-use cpal::StreamConfig;
-use cpal::traits::{DeviceTrait, HostTrait};
-use std::fs;
-use std::process::Command;
 
-/// Audio Fingerprinting CLI
-///
 /// You can either ingest a file into the database, or
 /// record audio for recognition. These modes are mutually exclusive.
 #[derive(Parser, Debug)]
@@ -23,7 +17,7 @@ use std::process::Command;
 #[command(group(
     ArgGroup::new("mode")
         .required(true)
-        .args(&["ingest", "recognise", "match" , "batch_test" , "random_test"]),
+        .args(&["ingest", "recognise", "match" , "random_test"]),
 ))]
 struct Args {
     /// Ingest a file into the database
@@ -42,10 +36,7 @@ struct Args {
     #[arg(short, long)]
     file: Option<String>,
 
-    /// Batch test: generate snippets from each ingested song and test recognition
-    #[arg(long)]
-    batch_test: bool,
-
+    /// Run a test with random snippets from the songs directory
     #[arg(long)]
     random_test: bool,
 }
@@ -54,13 +45,11 @@ fn main() {
     let args = Args::parse();
 
     if args.ingest {
-        if args.ingest {
-            if let Some(file) = args.file {
-                ingest_file(file);
-            } else {
-                eprintln!("Error: --ingest requires --file <path>");
-                std::process::exit(1);
-            }
+        if let Some(file) = args.file {
+            ingest_file(file);
+        } else {
+            eprintln!("Error: --ingest requires --file <path>");
+            std::process::exit(1);
         }
     } else if args.recognise {
         ingest_audio();
@@ -94,13 +83,14 @@ fn match_file(file_name: String) {
         sample_rate
     );
 
-    // Resample to target
-    let target_sr = AudioProcessor::TARGET_SAMPLE_RATE;
-    let rec_resampled = if sample_rate != target_sr {
-        audio_processor.resample_linear(&audio_samples, sample_rate, target_sr)
-    } else {
-        audio_samples
-    };
+    // Filter and resample to target
+    let filtered_samples =
+        audio_processor.apply_low_pass_filter(&audio_samples, sample_rate, 5000.0);
+    let rec_resampled = audio_processor.resample_linear(
+        &filtered_samples,
+        sample_rate,
+        AudioProcessor::TARGET_SAMPLE_RATE,
+    );
 
     // FFT distribution
     let fft_distribution =
@@ -139,12 +129,7 @@ fn match_file(file_name: String) {
     }
 }
 
-/// Ingest an audio file: decode, run FFT, fingerprint, and store in DB.
-// src/main.rs
-
-// ...
-
-/// Ingest an audio file: DECODE -> NORMALIZE WITH FFMPEG -> fingerprint, and store in DB.
+/// Ingest an audio file using in-memory processing
 fn ingest_file(file_name: String) {
     let song_name = file_name
         .rsplit('/')
@@ -158,159 +143,85 @@ fn ingest_file(file_name: String) {
     let audio_processor = AudioProcessor::new();
     let fft = CooleyTukeyFFT::default();
 
-    // --- NEW: Use FFmpeg to normalize the input file ---
-    const NORMALIZED_INGEST_PATH: &str = "temp_normalized_ingest.wav";
-    println!("⚙️ Normalizing '{}' with FFmpeg...", song_name);
-    let ffmpeg_status = Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-i")
-        .arg(&file_name) // Use the input file name here
-        .arg("-c:a")
-        .arg("pcm_s16le")
-        .arg("-ar")
-        .arg("11000")
-        .arg("-ac")
-        .arg("1")
-        .arg(NORMALIZED_INGEST_PATH)
-        .status();
+    let (audio_samples, sample_rate) = audio_processor.get_decoded_audio(file_name);
 
-    if ffmpeg_status.is_err() || !ffmpeg_status.unwrap().success() {
-        eprintln!(
-            "❌ FFmpeg normalization failed for {}. Skipping.",
-            file_name
-        );
-        return;
-    }
+    let filtered_samples =
+        audio_processor.apply_low_pass_filter(&audio_samples, sample_rate, 5000.0);
 
-    // --- Load the clean, normalized audio ---
-    let (normalized_samples, normalized_sample_rate) =
-        audio_processor.get_decoded_audio(NORMALIZED_INGEST_PATH.to_string());
-
-    println!(
-        "Normalized to {} samples at {} Hz",
-        normalized_samples.len(),
-        normalized_sample_rate
+    let downsampled_samples = audio_processor.resample_linear(
+        &filtered_samples,
+        sample_rate,
+        AudioProcessor::TARGET_SAMPLE_RATE,
     );
 
-    let config = StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(11000),
-        buffer_size: cpal::BufferSize::Default,
-    };
-    // audio_processor.play_recording(normalized_samples.clone(), &config);
+    println!(
+        "Processed to {} samples at {} Hz",
+        downsampled_samples.len(),
+        AudioProcessor::TARGET_SAMPLE_RATE
+    );
 
-    // --- The rest of the pipeline uses the normalized data ---
-    let fft_distribution =
-        fft.generate_freq_time_distribution(normalized_samples, normalized_sample_rate);
+    let fft_distribution = fft
+        .generate_freq_time_distribution(downsampled_samples, AudioProcessor::TARGET_SAMPLE_RATE);
 
+    // The flawed filtering logic has been removed.
+    // We now use all generated fingerprints.
     let fingerprints = generate_audio_fingerprint(&fft_distribution);
+    println!("Generated {} fingerprints", fingerprints.len());
 
     let song_id = db.write_song(&song_name);
     db.write_fingerprints(song_id, fingerprints);
 
     println!("✅ Successfully ingested and fingerprinted '{}'", song_name);
-
-    // --- IMPORTANT: Clean up the temporary file ---
-    let _ = fs::remove_file(NORMALIZED_INGEST_PATH);
 }
-/// Record audio via microphone and attempt recognition.
-// src/main.rs
 
-// Add this use statement at the top
-
-// ...
-
+/// Record audio via microphone and attempt recognition using in-memory processing
 fn ingest_audio() {
     let audio_processor = AudioProcessor::new();
+    let fft = CooleyTukeyFFT::default();
 
-    // --- 1. Record audio from the mic as before ---
-    let recording_time_duration = 12;
+    let recording_time_duration = 5;
     println!("🎤 Recording for {} seconds...", recording_time_duration);
     let (recorded_samples, config) = audio_processor.record_audio(recording_time_duration);
 
-    // let stream_config = StreamConfig {
-    //     channels: 1,
-    //     sample_rate: cpal::SampleRate(44_000),
-    //     buffer_size: cpal::BufferSize::Default,
-    // };
-    // audio_processor.play_recording(recorded_samples.clone(), &stream_config);
+    let filtered_samples =
+        audio_processor.apply_low_pass_filter(&recorded_samples, config.sample_rate().0, 5000.0);
 
-    // --- 2. Save the raw recording to a temporary WAV file ---
-    const RAW_WAV_PATH: &str = "temp_raw_recording.wav";
-    if let Err(e) = audio_processor.save_as_wav(&recorded_samples, &config, RAW_WAV_PATH) {
-        eprintln!("❌ Failed to save raw audio: {}", e);
-        return;
-    }
+    let downsampled_samples = audio_processor.resample_linear(
+        &filtered_samples,
+        config.sample_rate().0,
+        AudioProcessor::TARGET_SAMPLE_RATE,
+    );
 
-    // --- 3. Use FFmpeg to normalize the audio ---
-    const NORMALIZED_WAV_PATH: &str = "temp_normalized_recording.wav";
-    println!("⚙️ Normalizing audio with FFmpeg...");
-    let ffmpeg_status = Command::new("ffmpeg")
-        .arg("-y") // Overwrite output file if it exists
-        .arg("-i")
-        .arg(RAW_WAV_PATH)
-        .arg("-c:a") // Specify audio codec
-        .arg("pcm_s16le") // 16-bit PCM audio
-        .arg("-ar") // Set audio sample rate
-        .arg("11000")
-        .arg("-ac") // Set number of audio channels
-        .arg("1") // Mono
-        .arg(NORMALIZED_WAV_PATH)
-        .status();
+    println!(
+        "Processed to {} samples at {} Hz",
+        downsampled_samples.len(),
+        AudioProcessor::TARGET_SAMPLE_RATE
+    );
 
-    if ffmpeg_status.is_err() || !ffmpeg_status.unwrap().success() {
-        eprintln!(
-            "❌ FFmpeg normalization failed. Make sure FFmpeg is installed and in your PATH."
-        );
-        // Cleanup temp file before exiting
-        let _ = fs::remove_file(RAW_WAV_PATH);
-        return;
-    }
-
-    // --- 4. Load the clean, normalized audio file for processing ---
-    // We can now reuse the file decoding logic!
-    println!("🎧 Processing normalized audio...");
-    let (normalized_samples, normalized_sample_rate) =
-        audio_processor.get_decoded_audio(NORMALIZED_WAV_PATH.to_string());
-
-    let config = StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(11000),
-        buffer_size: cpal::BufferSize::Default,
-    };
-    audio_processor.play_recording(normalized_samples.clone(), &config);
-
-    // --- 5. The rest of the pipeline remains the same, but on the new audio data ---
-    // NOTE: We no longer need to filter or resample here, as FFmpeg already did it.
-    let fft = CooleyTukeyFFT::default();
-    let fft_distribution =
-        fft.generate_freq_time_distribution(normalized_samples, normalized_sample_rate);
+    let fft_distribution = fft
+        .generate_freq_time_distribution(downsampled_samples, AudioProcessor::TARGET_SAMPLE_RATE);
 
     let fingerprints = generate_audio_fingerprint(&fft_distribution);
     println!("Generated {} fingerprints", fingerprints.len());
 
-    // --- 6. Query the DB and vote ---
     let hash_vec: Vec<i64> = fingerprints.iter().map(|f| f.hash as i64).collect();
     let mut db = DB::new();
     let db_matches_by_hash = db.fetch_matches_grouped_by_hash(&hash_vec);
     let results = vote_best_matches(&fingerprints, &db_matches_by_hash, 5);
 
-    // ... (rest of the result printing logic)
     if results.is_empty() {
         println!("❌ No matches found");
     } else {
-        // Fetch titles for the result song_ids
         let song_ids: Vec<i32> = results.iter().map(|r| r.song_id as i32).collect();
         let titles = db.fetch_song_titles(&song_ids);
 
-        println!("Top matches:");
+        println!("✅ Top matches:");
         for r in results {
             let title = titles
                 .get(&(r.song_id as i32))
                 .cloned()
                 .unwrap_or_else(|| "<unknown>".to_string());
 
-            // Format time offset as MM:SS (handle negative values)
             let abs_offset = r.time_offset.abs();
             let minutes = (abs_offset / 60.0) as u32;
             let seconds = (abs_offset % 60.0) as u32;
@@ -323,8 +234,4 @@ fn ingest_audio() {
             );
         }
     }
-
-    // --- 7. IMPORTANT: Clean up the temporary files ---
-    let _ = fs::remove_file(RAW_WAV_PATH);
-    let _ = fs::remove_file(NORMALIZED_WAV_PATH);
 }

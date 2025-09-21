@@ -1,7 +1,7 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    fingerprint (song_id, absolute_time_offset) {
+    fingerprint (song_id, absolute_time_offset, hash) {
         hash -> Int8,
         absolute_time_offset -> Float8,
         song_id -> Int4,

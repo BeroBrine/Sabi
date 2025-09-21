@@ -44,7 +44,7 @@ impl DB {
         use crate::schema::fingerprint::dsl::*;
         use std::collections::HashSet;
 
-        const BATCH_SIZE: usize = 5000;
+        const BATCH_SIZE: usize = 15_000;
 
         // --- Deduplicate (hash, time) per song ---
         let mut seen = HashSet::new();
