@@ -69,9 +69,14 @@ pub fn run_random_snippet_test(songs_dir: &str) {
 
             // 3. Run through the FULL recognition pipeline (resample -> filter -> FFT -> fingerprint -> vote)
             let target_sr = AudioProcessor::TARGET_SAMPLE_RATE;
-            let resampled = audio_processor.resample_linear(snippet, sample_rate, target_sr);
-            let filtered = audio_processor.apply_low_pass_filter(&resampled, target_sr, 5500.0);
-            let fft_distribution = fft.generate_freq_time_distribution(filtered, target_sr);
+
+            // Corrected pipeline
+            // 1. First, apply the filter using the CORRECT original sample rate
+            let filtered = audio_processor.apply_low_pass_filter(snippet, sample_rate, 5000.0);
+
+            // 2. Then, resample the correctly filtered audio
+            let resampled = audio_processor.resample_linear(&filtered, sample_rate, target_sr);
+            let fft_distribution = fft.generate_freq_time_distribution(resampled, target_sr);
             let fingerprints = generate_audio_fingerprint(&fft_distribution);
 
             if fingerprints.is_empty() {

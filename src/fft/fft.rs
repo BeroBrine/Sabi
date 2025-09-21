@@ -257,7 +257,7 @@ impl FreqRange {
 impl Default for CooleyTukeyFFT {
     fn default() -> Self {
         let chunk_size = 2048;
-        let overlap_size = chunk_size / 4;
+        let overlap_size = chunk_size / 32;
         Self {
             CHUNK_SIZE: chunk_size,
             OVERLAP_SIZE: overlap_size,

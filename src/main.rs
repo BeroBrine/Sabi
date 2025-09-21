@@ -9,6 +9,7 @@ use crate::db::connector::DB;
 use crate::fingerprint::{generate_audio_fingerprint, vote_best_matches};
 use crate::{audio_processor::AudioProcessor, fft::fft::CooleyTukeyFFT};
 use clap::{ArgGroup, Parser};
+use cpal::traits::{DeviceTrait, HostTrait};
 use std::fs;
 
 /// Audio Fingerprinting CLI
@@ -153,17 +154,42 @@ fn ingest_file(file_name: String) {
 
     // Decode audio file into raw samples
     let (audio_samples, sample_rate) = audio_processor.get_decoded_audio(file_name);
+
     println!(
         "Decoded {} samples at {} Hz",
         audio_samples.len(),
         sample_rate
     );
 
-    let downsampled = audio_processor.resample_linear(
+    let filtered_samples = audio_processor.apply_low_pass_filter(
         &audio_samples,
+        sample_rate,
+        5000.0, // Cutoff frequency in Hz. Good for removing hiss without losing musical detail.
+    );
+
+    let downsampled = audio_processor.resample_linear(
+        &filtered_samples,
         sample_rate,
         AudioProcessor::TARGET_SAMPLE_RATE,
     );
+
+    // let host = cpal::default_host();
+    // let device = host
+    //     .default_output_device()
+    //     .expect("No output device available.");
+    //
+    // // 1. Get the device's supported configuration so we can copy the channel count
+    // let supported_config = device.default_output_config().unwrap();
+    //
+    // // 2. Manually create a new StreamConfig with our desired sample rate
+    // let playback_config = cpal::StreamConfig {
+    //     channels: supported_config.channels(), // Use the supported channel count
+    //     sample_rate: cpal::SampleRate(AudioProcessor::TARGET_SAMPLE_RATE), // Set our custom rate
+    //     buffer_size: cpal::BufferSize::Default, // Let cpal decide the best buffer size
+    // };
+    //
+    // 3. Now, call the playback function with the new, correct config
+    // audio_processor.play_recording(downsampled.clone(), &playback_config);
 
     // Compute FFT time-frequency distribution
     let fft_distribution =
@@ -190,34 +216,45 @@ fn ingest_file(file_name: String) {
 fn ingest_audio() {
     let audio_processor = AudioProcessor::new();
 
-    let recording_time_duration = 6;
+    let recording_time_duration = 12;
     println!("Recording for {} seconds...", recording_time_duration);
     let (recorded_samples, config) = audio_processor.record_audio(recording_time_duration);
 
     println!("Playback recorded audio...");
-    audio_processor.play_recording(recorded_samples.clone(), &config.clone().into());
 
     // Compute FFT time-frequency distribution
     let fft = CooleyTukeyFFT::default();
     // Resample recorded audio to target sample rate used in decoder for consistency
-    let target_sr = AudioProcessor::TARGET_SAMPLE_RATE;
-    let rec_resampled = if config.sample_rate().0 != target_sr {
-        let out =
-            audio_processor.resample_linear(&recorded_samples, config.sample_rate().0, target_sr);
-
-        out
-    } else {
-        recorded_samples
-    };
 
     let filtered_samples = audio_processor.apply_low_pass_filter(
-        &rec_resampled,
-        target_sr,
-        5500.0, // Cutoff frequency in Hz. Good for removing hiss without losing musical detail.
+        &recorded_samples,
+        config.sample_rate().0,
+        5000.0, // Cutoff frequency in Hz. Good for removing hiss without losing musical detail.
     );
 
+    let rec_resampled = audio_processor.resample_linear(
+        &filtered_samples,
+        config.sample_rate().0,
+        AudioProcessor::TARGET_SAMPLE_RATE,
+    );
+
+    // 2. Manually create a new StreamConfig with our desired sample rate
+    //
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .expect("No output device available.");
+
+    let playback_config = cpal::StreamConfig {
+        channels: 1,
+        sample_rate: cpal::SampleRate(AudioProcessor::TARGET_SAMPLE_RATE), // Set our custom rate
+        buffer_size: cpal::BufferSize::Default, // Let cpal decide the best buffer size
+    };
+
+    audio_processor.play_recording(rec_resampled.clone(), &playback_config);
+
     let fft_distribution =
-        fft.generate_freq_time_distribution(filtered_samples, AudioProcessor::TARGET_SAMPLE_RATE);
+        fft.generate_freq_time_distribution(rec_resampled, AudioProcessor::TARGET_SAMPLE_RATE);
 
     // Generate fingerprints
     let fingerprints = generate_audio_fingerprint(&fft_distribution);

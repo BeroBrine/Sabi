@@ -100,6 +100,8 @@ impl AudioProcessor {
                 let mono_sample = frame.iter().sum::<f32>() / num_channels as f32;
                 decoded_audio_samples.push(mono_sample);
             }
+            //// Append all decoded samples (interleaved) directly to the output vector
+            // decoded_audio_samples.extend_from_slice(sample_buf.samples());
         }
 
         Ok((decoded_audio_samples, sample_rate))
@@ -180,6 +182,7 @@ impl AudioProcessor {
             .expect("No output device available.");
 
         // We use the *exact same config* from the recording to ensure correct playback.
+        println!("Output config: {:?}", config);
 
         //
         let duration_secs =
