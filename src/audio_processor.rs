@@ -1,3 +1,4 @@
+use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::fs::File;
 use std::sync::{Arc, Mutex, mpsc};
@@ -115,15 +116,15 @@ impl AudioProcessor {
 
     /// **RECORDS** audio from the default microphone for a set duration.
     /// It returns the raw audio samples and the configuration used to record them.
+    // src/audio_processor.rs
+
+    // ...
+
     pub fn record_audio(&self, duration_secs: u64) -> (Vec<f32>, SupportedStreamConfig) {
         let host = cpal::default_host();
         let device = host.default_input_device().expect("No input device found");
         let config_cpal = device.default_input_config().unwrap();
 
-        let sample_rate = config_cpal.sample_rate().0;
-        let channels = config_cpal.channels();
-
-        // Shared vector for thread-safe access
         let recorded_samples = Arc::new(Mutex::new(Vec::new()));
         let samples_clone = recorded_samples.clone();
 
@@ -134,11 +135,8 @@ impl AudioProcessor {
                 .build_input_stream(
                     &config_cpal.clone().into(),
                     move |data: &[f32], _: &_| {
-                        let mut samples = samples_clone.lock().unwrap();
-                        for frame in data.chunks(channels as usize) {
-                            let mono = frame.iter().sum::<f32>() / channels as f32;
-                            samples.push(mono);
-                        }
+                        // REMOVED mono conversion. Just copy all the raw samples.
+                        samples_clone.lock().unwrap().extend_from_slice(data);
                     },
                     err_fn,
                     None,
@@ -148,14 +146,10 @@ impl AudioProcessor {
                 .build_input_stream(
                     &config_cpal.clone().into(),
                     move |data: &[i16], _: &_| {
+                        // REMOVED mono conversion. Convert all raw samples to f32.
                         let mut samples = samples_clone.lock().unwrap();
-                        for frame in data.chunks(channels as usize) {
-                            let mono = frame
-                                .iter()
-                                .map(|s| *s as f32 / i16::MAX as f32)
-                                .sum::<f32>()
-                                / channels as f32;
-                            samples.push(mono);
+                        for &sample in data.iter() {
+                            samples.push(sample as f32 / i16::MAX as f32);
                         }
                     },
                     err_fn,
@@ -169,7 +163,6 @@ impl AudioProcessor {
         thread::sleep(Duration::from_secs(duration_secs));
         drop(stream);
 
-        // Return a copy of the recorded samples
         (recorded_samples.lock().unwrap().clone(), config_cpal)
     }
 
@@ -269,5 +262,35 @@ impl AudioProcessor {
         }
 
         filtered_samples
+    }
+    // src/audio_processor.rs
+
+    // Add this use statement at the top
+
+    // ... inside impl AudioProcessor
+
+    /// **SAVES** a buffer of f32 samples to a temporary WAV file.
+    /// This is necessary before passing the audio to FFmpeg.
+    pub fn save_as_wav(
+        &self,
+        samples: &[f32],
+        spec: &cpal::SupportedStreamConfig,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let wav_spec = WavSpec {
+            channels: spec.channels() as u16,
+            sample_rate: spec.sample_rate().0,
+            bits_per_sample: 16, // A standard for WAV files
+            sample_format: SampleFormat::Int,
+        };
+
+        let mut writer = WavWriter::create(path, wav_spec)?;
+        for &sample in samples {
+            // Convert f32 sample in range [-1.0, 1.0] to i16
+            let amplitude = i16::MAX as f32;
+            writer.write_sample((sample * amplitude) as i16)?;
+        }
+        writer.finalize()?;
+        Ok(())
     }
 }
