@@ -11,6 +11,7 @@ cpal = "0.16.0"
 diesel = { version = "2.3.1", features = ["postgres"] }
 dotenvy = "0.15.7"
 ordered-float = "5.0.0"
+rand = "0.9.2"
 sha256 = "1.6.0"
 symphonia = { version = "0.5.4", features = ["all-codecs"] }
 tokio = { version = "1.47.1", features = ["full"] }

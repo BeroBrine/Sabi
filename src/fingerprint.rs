@@ -96,7 +96,7 @@ pub fn vote_best_matches(
         if let Some(db_matches) = db_matches_by_hash.get(&fp.hash) {
             for &(song_id, db_time) in db_matches {
                 let offset = db_time - fp.abs_anchor_tm_offset;
-                let offset_bin = (offset / 0.05).round() as i32; // 50 ms bins
+                let offset_bin = (offset / 0.020).round() as i32; // 50 ms bins
 
                 *offset_histograms
                     .entry(song_id)
@@ -114,7 +114,7 @@ pub fn vote_best_matches(
             results.push(VoteResult {
                 song_id,
                 score,
-                time_offset: best_bin as f32 * 0.05, // convert back to seconds
+                time_offset: best_bin as f32 * 0.020, // convert back to seconds
             });
         }
     }

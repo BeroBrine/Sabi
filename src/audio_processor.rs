@@ -1,3 +1,4 @@
+use std::f32::consts::PI;
 use std::fs::File;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -65,12 +66,10 @@ impl AudioProcessor {
             .expect("an error has occurred while probing");
         let mut format = prober.format;
 
-        println!("{:?}", format.tracks());
         let codec_params = &format.tracks().get(0).unwrap().codec_params;
         let sample_rate = codec_params.sample_rate.unwrap();
         let decoder_options = DecoderOptions::default();
 
-        println!("the decoded type is {} ", codec_params.codec);
         let mut decoder = self
             .codec_registry
             .make(codec_params, &decoder_options)
@@ -181,7 +180,6 @@ impl AudioProcessor {
             .expect("No output device available.");
 
         // We use the *exact same config* from the recording to ensure correct playback.
-        println!("Output config: {:?}", config);
 
         //
         let duration_secs =
@@ -236,5 +234,37 @@ impl AudioProcessor {
             }
         }
         resampled
+    }
+
+    // ... inside the `impl AudioProcessor` block ...
+
+    /// Applies a simple first-order low-pass filter to the audio samples.
+    /// This is useful for reducing high-frequency noise, like microphone hiss.
+    pub fn apply_low_pass_filter(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+        cutoff_freq: f32,
+    ) -> Vec<f32> {
+        if samples.is_empty() {
+            return Vec::new();
+        }
+
+        // RC time constant for the filter
+        let rc = 1.0 / (2.0 * PI * cutoff_freq);
+        // Alpha smoothing factor
+        let dt = 1.0 / sample_rate as f32;
+        let alpha = dt / (rc + dt);
+
+        let mut filtered_samples = vec![0.0; samples.len()];
+        filtered_samples[0] = samples[0]; // Start with the first sample
+
+        for i in 1..samples.len() {
+            // y[i] = y[i-1] + alpha * (x[i] - y[i-1])
+            filtered_samples[i] =
+                filtered_samples[i - 1] + alpha * (samples[i] - filtered_samples[i - 1]);
+        }
+
+        filtered_samples
     }
 }

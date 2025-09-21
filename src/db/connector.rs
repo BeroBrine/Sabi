@@ -42,11 +42,11 @@ impl DB {
 
     pub fn write_fingerprints(&mut self, _song_id: i32, fingerprint_info: Vec<FingerprintInfo>) {
         use crate::schema::fingerprint::dsl::*;
+        use std::collections::HashSet;
 
         const BATCH_SIZE: usize = 5000;
 
         // --- Deduplicate (hash, time) per song ---
-        use std::collections::HashSet;
         let mut seen = HashSet::new();
         let mut fingerprints: Vec<Fingerprint> = Vec::new();
 
@@ -65,25 +65,33 @@ impl DB {
             }
         }
 
-        let mut all_inserted_records = Vec::new();
+        if fingerprints.is_empty() {
+            println!("No new fingerprints to write for song_id: {}", _song_id);
+            return;
+        }
 
-        let result: Result<Vec<Fingerprint>> = self.connector.transaction(|conn| {
+        // --- Transaction to insert fingerprints in batches ---
+        let result: Result<usize, diesel::result::Error> = self.connector.transaction(|conn| {
+            let mut total_inserted = 0;
             for batch in fingerprints.chunks(BATCH_SIZE) {
-                let inserted_record_fingerprint = insert_into(fingerprint)
+                let inserted_count = insert_into(fingerprint)
                     .values(batch)
                     .on_conflict(on_constraint("fingerprint_pkey"))
                     .do_nothing()
-                    .get_result::<Fingerprint>(conn)?;
+                    .execute(conn)?; // <-- CORRECTED: Use .execute()
 
-                println!("Pushed {} ", batch.len());
-                all_inserted_records.push(inserted_record_fingerprint);
+                total_inserted += inserted_count;
+                println!("Batch executed. Affected rows: {}", inserted_count);
             }
-            Ok(all_inserted_records)
+            Ok(total_inserted)
         });
 
         match result {
-            Ok(records) => println!("Successfully inserted {} total records", records.len()),
-            Err(e) => eprintln!("Transaction failed {:?} ", e),
+            Ok(count) => println!(
+                "✅ Successfully committed {} new fingerprints to the database.",
+                count
+            ),
+            Err(e) => eprintln!("❌ Transaction failed: {:?}", e),
         }
     }
     pub fn fetch_matches_grouped_by_hash(
@@ -101,7 +109,6 @@ impl DB {
         let mut map: std::collections::HashMap<u64, Vec<(u32, f32)>> =
             std::collections::HashMap::new();
 
-        println!("matching fingerprint {:?} ", records);
         for rec in records {
             let h = rec.hash as u64;
             let db_time = rec.absolute_time_offset as f32;

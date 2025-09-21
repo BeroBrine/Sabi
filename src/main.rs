@@ -3,6 +3,7 @@ mod db;
 mod fft;
 mod fingerprint;
 mod schema;
+mod tester;
 
 use crate::db::connector::DB;
 use crate::fingerprint::{generate_audio_fingerprint, vote_best_matches};
@@ -19,7 +20,7 @@ use std::fs;
 #[command(group(
     ArgGroup::new("mode")
         .required(true)
-        .args(&["ingest", "recognise", "match" , "batch_test"]),
+        .args(&["ingest", "recognise", "match" , "batch_test" , "random_test"]),
 ))]
 struct Args {
     /// Ingest a file into the database
@@ -41,6 +42,9 @@ struct Args {
     /// Batch test: generate snippets from each ingested song and test recognition
     #[arg(long)]
     batch_test: bool,
+
+    #[arg(long)]
+    random_test: bool,
 }
 
 fn main() {
@@ -64,105 +68,14 @@ fn main() {
             eprintln!("Error: --match requires --file <path>");
             std::process::exit(1);
         }
-    } else if args.batch_test {
+    } else if args.random_test {
         if let Some(dir) = args.file {
-            batch_test(dir);
+            tester::run_random_snippet_test(&dir);
         } else {
-            eprintln!("Error: --batch-test requires --file <songs_dir>");
+            eprintln!("Error: --random-test requires --file <songs_dir>");
             std::process::exit(1);
         }
     }
-}
-
-fn batch_test(songs_dir: String) {
-    let audio_processor = AudioProcessor::new();
-    let fft = CooleyTukeyFFT::default();
-    let mut db = DB::new();
-
-    let mut total_tests = 0;
-    let mut correct = 0;
-
-    // Iterate over files in songs_dir
-    for entry in fs::read_dir(&songs_dir).expect("Could not read dir") {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let file_path = path.to_string_lossy().to_string();
-
-            println!("the file path is {}", file_path);
-            // Song name
-            let song_name = path.file_name().unwrap().to_string_lossy().to_string();
-
-            println!("🎵 Testing {}", song_name);
-
-            // Decode full song
-            let (samples, sample_rate) = audio_processor.get_decoded_audio(file_path.clone());
-
-            if samples.len() < sample_rate as usize * 15 {
-                println!("Skipping {}, too short", song_name);
-                continue;
-            }
-
-            // Generate snippets (3 random 10s snippets per song)
-            for snippet_idx in 0..3 {
-                let start_sec = 30 + snippet_idx * 20; // deterministic: 30s, 50s, 70s
-                let start_idx = (start_sec * sample_rate as usize)
-                    .min(samples.len() - sample_rate as usize * 10);
-                let end_idx = start_idx + sample_rate as usize * 10;
-
-                let snippet = samples[start_idx..end_idx].to_vec();
-
-                // Resample
-                let target_sr = AudioProcessor::TARGET_SAMPLE_RATE;
-                let resampled = if sample_rate != target_sr {
-                    audio_processor.resample_linear(&snippet, sample_rate, target_sr)
-                } else {
-                    snippet
-                };
-
-                // FFT → fingerprints
-                let fft_distribution = fft.generate_freq_time_distribution(resampled, target_sr);
-                let fingerprints = generate_audio_fingerprint(&fft_distribution);
-
-                // Query DB
-                let hash_vec: Vec<i64> = fingerprints.iter().map(|f| f.hash as i64).collect();
-                let db_matches_by_hash = db.fetch_matches_grouped_by_hash(&hash_vec);
-
-                // Vote
-                let results = vote_best_matches(&fingerprints, &db_matches_by_hash, 5);
-
-                total_tests += 1;
-
-                if let Some(best) = results.first() {
-                    let titles = db.fetch_song_titles(&[best.song_id as i32]);
-                    let predicted = titles.get(&(best.song_id as i32)).unwrap();
-
-                    println!(
-                        "Snippet {}: predicted=\"{}\" score={} offset={:.2}s",
-                        snippet_idx + 1,
-                        predicted,
-                        best.score,
-                        best.time_offset
-                    );
-
-                    if predicted == &song_name {
-                        correct += 1;
-                    }
-                } else {
-                    println!("Snippet {}: ❌ No match", snippet_idx + 1);
-                }
-            }
-        }
-    }
-
-    println!(
-        "📊 Batch test finished: {}/{} correct ({:.1}%)",
-        correct,
-        total_tests,
-        (correct as f32 / total_tests as f32) * 100.0
-    );
 }
 
 /// Decode a snippet file and try to match against DB
@@ -246,7 +159,6 @@ fn ingest_file(file_name: String) {
         sample_rate
     );
 
-    // Apply 4x downsampling like Go (dspRatio = 4)
     let downsampled = audio_processor.resample_linear(
         &audio_samples,
         sample_rate,
@@ -298,15 +210,14 @@ fn ingest_audio() {
         recorded_samples
     };
 
-    // Apply 4x downsampling like Go (dspRatio = 4)
-    let downsampled = audio_processor.resample_linear(
+    let filtered_samples = audio_processor.apply_low_pass_filter(
         &rec_resampled,
         target_sr,
-        AudioProcessor::TARGET_SAMPLE_RATE,
+        5500.0, // Cutoff frequency in Hz. Good for removing hiss without losing musical detail.
     );
 
     let fft_distribution =
-        fft.generate_freq_time_distribution(downsampled, AudioProcessor::TARGET_SAMPLE_RATE);
+        fft.generate_freq_time_distribution(filtered_samples, AudioProcessor::TARGET_SAMPLE_RATE);
 
     // Generate fingerprints
     let fingerprints = generate_audio_fingerprint(&fft_distribution);

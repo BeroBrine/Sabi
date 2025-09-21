@@ -156,6 +156,7 @@ impl CooleyTukeyFFT {
 
         let mut raw_peaks = Vec::new();
 
+        // Find all local maxima in the spectrum
         for i in 1..half_n - 1 {
             if magnitudes[i - 1] < magnitudes[i] && magnitudes[i] > magnitudes[i + 1] {
                 let freq = i as f32 * (sample_rate as f32 / n as f32);
@@ -191,16 +192,43 @@ impl CooleyTukeyFFT {
             .cloned()
             .collect();
 
-        // Sort by magnitude
-        low_band.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
-        mid_band.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
-        high_band.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
-
-        // --- Take more peaks per band for density ---
+        // --- Dynamic Thresholding & Peak Selection ---
         let mut final_peaks = Vec::new();
-        final_peaks.extend(low_band.into_iter().take(2)); // 2 from low
-        final_peaks.extend(mid_band.into_iter().take(3)); // 3 from mid
-        final_peaks.extend(high_band.into_iter().take(3)); // 3 from high
+        const THRESHOLD_MULTIPLIER: f32 = 1.75; // Peak must be 1.75x stronger than the band's average.
+        const MAX_PEAKS_PER_BAND: usize = 5; // Safety cap to prevent too many fingerprints from one frame.
+
+        // Closure to process a band with the new logic
+        let process_band = |band: Vec<PeakInfo>| -> Vec<PeakInfo> {
+            if band.is_empty() {
+                return Vec::new();
+            }
+
+            // Calculate the average magnitude for this specific band
+            let total_magnitude: f32 = band.iter().map(|p| p.magnitude.into_inner()).sum();
+            let average_magnitude = total_magnitude / band.len() as f32;
+
+            // Define the dynamic threshold
+            let threshold = average_magnitude * THRESHOLD_MULTIPLIER;
+
+            // 1. Filter the peaks that are stronger than the threshold
+            let mut strong_peaks: Vec<PeakInfo> = band
+                .into_iter()
+                .filter(|p| p.magnitude.into_inner() > threshold)
+                .collect();
+
+            // 2. Sort the remaining strong peaks by magnitude
+            strong_peaks.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+
+            // 3. Apply the safety cap
+            strong_peaks.truncate(MAX_PEAKS_PER_BAND);
+
+            strong_peaks
+        };
+
+        // Process each band and collect the results
+        final_peaks.extend(process_band(low_band));
+        final_peaks.extend(process_band(mid_band));
+        final_peaks.extend(process_band(high_band));
 
         final_peaks
     }

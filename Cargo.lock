@@ -1177,6 +1177,7 @@ dependencies = [
  "diesel",
  "dotenvy",
  "ordered-float",
+ "rand",
  "sha256",
  "symphonia",
  "tokio",
