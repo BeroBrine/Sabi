@@ -91,14 +91,14 @@ Before you begin, ensure you have the following installed:
 1. **Clone the Repository**
    ```bash
    git clone https://github.com/BeroBrine/Sabi.git
-   cd sabi
+   cd Sabi
    ```
 
 2. **Configure the Database**
    - Create a user and a database in PostgreSQL.
-   - Copy the example environment file:
+   - Crate a .env file in root folder.
      ```bash
-     cp .env.example .env
+     touch .env
      ```
    - Edit the `.env` file and set your `DATABASE_URL`:
      ```
