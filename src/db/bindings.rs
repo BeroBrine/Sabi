@@ -27,3 +27,16 @@ pub struct NewSong {
     pub title: String,
     pub created_at: Option<SystemTime>,
 }
+
+use diesel::sql_types::{BigInt, Double, Integer};
+#[derive(QueryableByName, Debug)]
+pub struct FingerprintMatch {
+    #[diesel(sql_type = BigInt)]
+    pub hash: i64,
+
+    #[diesel(sql_type = Integer)]
+    pub song_id: i32,
+
+    #[diesel(sql_type = Double)]
+    pub absolute_time_offset: f64,
+}

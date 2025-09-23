@@ -174,19 +174,19 @@ impl CooleyTukeyFFT {
         }
 
         // --- Band splitting ---
-        let mut low_band: Vec<PeakInfo> = raw_peaks
+        let low_band: Vec<PeakInfo> = raw_peaks
             .iter()
             .filter(|p| (20.0..300.0).contains(&p.freq.into_inner()))
             .cloned()
             .collect();
 
-        let mut mid_band: Vec<PeakInfo> = raw_peaks
+        let mid_band: Vec<PeakInfo> = raw_peaks
             .iter()
             .filter(|p| (300.0..2000.0).contains(&p.freq.into_inner()))
             .cloned()
             .collect();
 
-        let mut high_band: Vec<PeakInfo> = raw_peaks
+        let high_band: Vec<PeakInfo> = raw_peaks
             .iter()
             .filter(|p| (2000.0..5000.0).contains(&p.freq.into_inner()))
             .cloned()
@@ -197,7 +197,6 @@ impl CooleyTukeyFFT {
         const THRESHOLD_MULTIPLIER: f32 = 1.75; // Peak must be 1.75x stronger than the band's average.
         const MAX_PEAKS_PER_BAND: usize = 5; // Safety cap to prevent too many fingerprints from one frame.
 
-        // Closure to process a band with the new logic
         let process_band = |band: Vec<PeakInfo>| -> Vec<PeakInfo> {
             if band.is_empty() {
                 return Vec::new();
@@ -207,7 +206,6 @@ impl CooleyTukeyFFT {
             let total_magnitude: f32 = band.iter().map(|p| p.magnitude.into_inner()).sum();
             let average_magnitude = total_magnitude / band.len() as f32;
 
-            // Define the dynamic threshold
             let threshold = average_magnitude * THRESHOLD_MULTIPLIER;
 
             // 1. Filter the peaks that are stronger than the threshold

@@ -95,15 +95,11 @@ impl AudioProcessor {
                 SampleBuffer::<f32>::new(decoded_packet.capacity() as u64, *decoded_packet.spec());
             sample_buf.copy_interleaved_ref(decoded_packet);
 
-            // --- THE FIX IS HERE ---
-            // Instead of pushing the number of frames, we extend the vector with the actual samples.
             for i in (0..sample_buf.len()).step_by(num_channels) {
                 let frame = &sample_buf.samples()[i..i + num_channels];
                 let mono_sample = frame.iter().sum::<f32>() / num_channels as f32;
                 decoded_audio_samples.push(mono_sample);
             }
-            //// Append all decoded samples (interleaved) directly to the output vector
-            // decoded_audio_samples.extend_from_slice(sample_buf.samples());
         }
 
         Ok((decoded_audio_samples, sample_rate))
@@ -115,23 +111,7 @@ impl AudioProcessor {
         file
     }
 
-    /// **RECORDS** audio from the default microphone for a set duration.
-    /// It returns the raw audio samples and the configuration used to record them.
-    // src/audio_processor.rs
-
-    // ...
-
     pub fn record_audio(&self, duration_secs: u64) -> (Vec<f32>, SupportedStreamConfig) {
-        let mut gate = NoiseGate::new(
-            -36.0,   // Open Threshold
-            -54.0,   // Close Treshold
-            48000.0, // Sample Rate
-            2,       // Channels
-            150.0,   // Release Rate
-            25.0,    // Attack Rate
-            150.0,   // Hold time
-        );
-
         let host = cpal::default_host();
         let device = host.default_input_device().expect("No input device found");
         let config_cpal = device.default_input_config().unwrap();
@@ -156,7 +136,6 @@ impl AudioProcessor {
                 .build_input_stream(
                     &config_cpal.clone().into(),
                     move |data: &[i16], _: &_| {
-                        // REMOVED mono conversion. Convert all raw samples to f32.
                         let mut samples = samples_clone.lock().unwrap();
                         for &sample in data.iter() {
                             samples.push(sample as f32 / i16::MAX as f32);
@@ -175,23 +154,17 @@ impl AudioProcessor {
 
         (recorded_samples.lock().unwrap().clone(), config_cpal)
     }
-
-    /// **PLAYS** the audio samples that were just recorded.
-    /// It takes the samples and the config to ensure playback is accurate.
     pub fn play_recording(&self, recorded_samples: Vec<f32>, config: &StreamConfig) {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
             .expect("No output device available.");
 
-        // We use the *exact same config* from the recording to ensure correct playback.
         println!("Output config: {:?}", config);
 
-        //
         let duration_secs =
             recorded_samples.len() as f32 / (config.sample_rate.0 as f32 * config.channels as f32);
 
-        // An iterator allows us to consume the samples one by one in the callback.
         let mut samples_iter = recorded_samples.into_iter();
 
         let stream = device
@@ -242,9 +215,6 @@ impl AudioProcessor {
         resampled
     }
 
-    // ... inside the `impl AudioProcessor` block ...
-
-    /// Applies a simple first-order low-pass filter to the audio samples.
     /// This is useful for reducing high-frequency noise, like microphone hiss.
     pub fn apply_low_pass_filter(
         &self,
@@ -272,35 +242,5 @@ impl AudioProcessor {
         }
 
         filtered_samples
-    }
-    // src/audio_processor.rs
-
-    // Add this use statement at the top
-
-    // ... inside impl AudioProcessor
-
-    /// **SAVES** a buffer of f32 samples to a temporary WAV file.
-    /// This is necessary before passing the audio to FFmpeg.
-    pub fn save_as_wav(
-        &self,
-        samples: &[f32],
-        spec: &cpal::SupportedStreamConfig,
-        path: &str,
-    ) -> anyhow::Result<()> {
-        let wav_spec = WavSpec {
-            channels: spec.channels() as u16,
-            sample_rate: spec.sample_rate().0,
-            bits_per_sample: 16, // A standard for WAV files
-            sample_format: SampleFormat::Int,
-        };
-
-        let mut writer = WavWriter::create(path, wav_spec)?;
-        for &sample in samples {
-            // Convert f32 sample in range [-1.0, 1.0] to i16
-            let amplitude = i16::MAX as f32;
-            writer.write_sample((sample * amplitude) as i16)?;
-        }
-        writer.finalize()?;
-        Ok(())
     }
 }

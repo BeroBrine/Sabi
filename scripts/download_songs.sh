@@ -1,12 +1,6 @@
 #!/bin/bash
 
-# ==============================================================================
 # Song Downloader Script
-#
-# Description:
-#   This script reads a list of song names from a text file, searches for
-#   them on YouTube, and downloads the audio if it doesn't already exist
-#   in the destination directory.
 #
 # Prerequisites:
 #   - yt-dlp: A powerful video/audio downloader.
@@ -24,17 +18,15 @@
 #   2. Create a file named 'song_list.txt' in the same directory as this script.
 #   3. Add one song name per line in 'song_list.txt'.
 #   4. Run the script from your terminal: ./download_songs.sh
-# ==============================================================================
 
 # --- Configuration ---
 # The directory where your song files will be saved.
-SONGS_DIR="songs"
+SONGS_DIR="../songs"
 
 # The name of the file containing the list of songs to download.
 SONG_LIST_FILE="song_list.txt"
 
 
-# --- Pre-flight Checks ---
 
 # 1. Check if yt-dlp is installed.
 if ! command -v yt-dlp &> /dev/null
@@ -60,18 +52,15 @@ if [ ! -f "$SONG_LIST_FILE" ]; then
 fi
 
 
-# --- Main Script ---
 
-# 1. Create the songs directory if it doesn't exist.
 if [ ! -d "$SONGS_DIR" ]; then
   echo "📁 Directory '$SONGS_DIR' not found. Creating it..."
   mkdir -p "$SONGS_DIR"
 fi
+cd ..
 
 echo "🎵 Starting song download process..."
 echo "================================="
-
-# 2. Read the song list file line by line.
 # The `|| [[ -n "$song_query" ]]` handles files that don't end with a newline.
 while IFS= read -r song_query || [[ -n "$song_query" ]]; do
   # Skip empty lines
@@ -81,7 +70,7 @@ while IFS= read -r song_query || [[ -n "$song_query" ]]; do
 
   echo "🔎 Processing: '$song_query'"
 
-  # 3. Use yt-dlp to download the audio.
+  #  Use yt-dlp to download the audio.
   #    - It searches YouTube for the query and picks the first result.
   #    - It extracts the audio into mp3 format.
   #    - The key flag is '--no-overwrites' (-n), which automatically skips

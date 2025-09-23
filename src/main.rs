@@ -10,8 +10,6 @@ use crate::fingerprint::{generate_audio_fingerprint, vote_best_matches};
 use crate::{audio_processor::AudioProcessor, fft::fft::CooleyTukeyFFT};
 use clap::{ArgGroup, Parser};
 
-/// You can either ingest a file into the database, or
-/// record audio for recognition. These modes are mutually exclusive.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 #[command(group(
@@ -163,8 +161,6 @@ fn ingest_file(file_name: String) {
     let fft_distribution = fft
         .generate_freq_time_distribution(downsampled_samples, AudioProcessor::TARGET_SAMPLE_RATE);
 
-    // The flawed filtering logic has been removed.
-    // We now use all generated fingerprints.
     let fingerprints = generate_audio_fingerprint(&fft_distribution);
     println!("Generated {} fingerprints", fingerprints.len());
 
@@ -183,9 +179,11 @@ fn ingest_audio() {
     println!("🎤 Recording for {} seconds...", recording_time_duration);
     let (recorded_samples, config) = audio_processor.record_audio(recording_time_duration);
 
+    println!("-- Applying Low Pass Filter");
     let filtered_samples =
         audio_processor.apply_low_pass_filter(&recorded_samples, config.sample_rate().0, 5000.0);
 
+    println!("-- Downsampling Audio");
     let downsampled_samples = audio_processor.resample_linear(
         &filtered_samples,
         config.sample_rate().0,
@@ -198,6 +196,7 @@ fn ingest_audio() {
         AudioProcessor::TARGET_SAMPLE_RATE
     );
 
+    println!("-- Generating FFT Distribution");
     let fft_distribution = fft
         .generate_freq_time_distribution(downsampled_samples, AudioProcessor::TARGET_SAMPLE_RATE);
 
@@ -206,7 +205,9 @@ fn ingest_audio() {
 
     let hash_vec: Vec<i64> = fingerprints.iter().map(|f| f.hash as i64).collect();
     let mut db = DB::new();
+    println!("-- Fetching Hash Matches From DB");
     let db_matches_by_hash = db.fetch_matches_grouped_by_hash(&hash_vec);
+    println!("-- Voting For The Best Matching Result");
     let results = vote_best_matches(&fingerprints, &db_matches_by_hash, 5);
 
     if results.is_empty() {

@@ -3,9 +3,6 @@
 # ==============================================================================
 # Sabi - Recognition Tester Script
 #
-# Description:
-#   This script automates the process of testing the audio recognition.
-#   It performs the following steps:
 #     1. Selects a random song from the specified directory.
 #     2. Calculates a random start time, avoiding the very beginning and end.
 #     3. Plays a short snippet of the song in the background.
@@ -23,22 +20,16 @@
 #   2. Run the script from your terminal: ./test_recognition.sh
 # ==============================================================================
 
-# --- Configuration ---
-# The directory where your song files are located.
-SONGS_DIR="songs"
 
-# How long the audio snippet should be (in seconds).
-# This should match the recording duration in your Rust app.
+SONGS_DIR="../songs"
+
 SNIPPET_DURATION=15
 
-# How many seconds to skip at the beginning of the song to avoid silence/intros.
 START_MARGIN=10
 
-# A buffer to ensure the snippet doesn't run past the end of the song.
 END_MARGIN=15
 
 
-# --- Pre-flight Checks ---
 
 # 1. Check if ffplay is installed for playback.
 if ! command -v ffplay &> /dev/null; then
@@ -69,13 +60,11 @@ if [ -z "$(ls -A "$SONGS_DIR")" ]; then
 fi
 
 
-# --- Main Script ---
+
 
 echo "🚀 Starting Recognition Test..."
 echo "---------------------------------"
 
-# 1. Select a random song file from the directory.
-# `find` gets all files, `shuf -n 1` picks one randomly.
 RANDOM_SONG=$(find "$SONGS_DIR" -type f | shuf -n 1)
 
 if [ -z "$RANDOM_SONG" ]; then
@@ -85,12 +74,9 @@ fi
 
 echo "🎵 Selected Song: $RANDOM_SONG"
 
-# 2. Get the duration of the song in seconds using ffprobe.
-# The output is cleaned up to be an integer.
 DURATION=$(ffprobe -i "$RANDOM_SONG" -show_entries format=duration -v quiet -of csv="p=0")
 DURATION_INT=${DURATION%.*} # Convert float to integer (e.g., 210.456 -> 210)
 
-# 3. Calculate a valid range for the random starting point.
 MIN_START=$START_MARGIN
 MAX_START=$((DURATION_INT - SNIPPET_DURATION - END_MARGIN))
 
@@ -101,28 +87,21 @@ if [ "$MAX_START" -le "$MIN_START" ]; then
     exit 1
 fi
 
-# 4. Generate a random starting second within the calculated range.
 RANDOM_START=$((RANDOM % (MAX_START - MIN_START + 1) + MIN_START))
 
 echo "🎧 Playing a $SNIPPET_DURATION-second snippet starting at $RANDOM_START seconds."
-echo "(Your microphone will pick this up for recognition)"
 
-# 5. Play the audio snippet in the background using ffplay.
-#    The '&' at the end is the crucial change that runs this command in the background.
 ffplay -v quiet -nodisp -autoexit -ss "$RANDOM_START" -t "$SNIPPET_DURATION" "$RANDOM_SONG" &
-FFPLAY_PID=$! # Store the process ID of the background job
+FFPLAY_PID=$! 
 
-# Give ffplay a moment to buffer and start playing before we listen.
 sleep 0.5
 
 echo "🎤 Snippet playing. Starting recognition immediately..."
 echo "================================================"
 
-# 6. Run the recognition command for your Rust project.
-#    This will now run WHILE the audio is playing in the background.
-cargo run -- --recognise
+RUSTFLAGS=-Awarnings cargo run --release -- --recognise
 
-# 7. Wait for the ffplay process to finish to ensure a clean exit.
+
 wait $FFPLAY_PID
 
 echo ""

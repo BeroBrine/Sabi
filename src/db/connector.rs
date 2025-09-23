@@ -1,11 +1,11 @@
 use crate::{
-    db::bindings::{Fingerprint, NewSong, Songs},
-    fingerprint::{self, FingerprintInfo},
+    db::bindings::{Fingerprint, FingerprintMatch, NewSong, Songs},
+    fingerprint::FingerprintInfo,
 };
 use anyhow::Result;
-use diesel::{dsl::insert_into, prelude::*, select, upsert::on_constraint};
+use diesel::{RunQueryDsl, dsl::insert_into, prelude::*, upsert::on_constraint};
 use dotenvy::dotenv;
-use std::{env, time::SystemTime};
+use std::{collections::HashMap, env, time::SystemTime};
 
 pub struct DB {
     pub connector: PgConnection,
@@ -78,7 +78,7 @@ impl DB {
                     .values(batch)
                     .on_conflict(on_constraint("fingerprint_pkey"))
                     .do_nothing()
-                    .execute(conn)?; // <-- CORRECTED: Use .execute()
+                    .execute(conn)?;
 
                 total_inserted += inserted_count;
                 println!("Batch executed. Affected rows: {}", inserted_count);
@@ -98,24 +98,56 @@ impl DB {
         &mut self,
         hashes_in: &Vec<i64>,
     ) -> std::collections::HashMap<u64, Vec<(u32, f32)>> {
-        use crate::schema::fingerprint::dsl::*;
+        if hashes_in.is_empty() {
+            return std::collections::HashMap::new();
+        }
 
-        let records: Vec<Fingerprint> = fingerprint
-            .select(fingerprint::all_columns())
-            .filter(hash.eq_any(hashes_in))
-            .get_results(&mut self.connector)
-            .unwrap();
+        let records: Vec<FingerprintMatch> = self.connector.transaction(|conn| {
+            diesel::sql_query(
+                "CREATE TEMPORARY TABLE Temp_hashes (hash BIGINT NOT NULl PRIMARY KEY) ON COMMIT DROP;"
+            ).execute(conn).unwrap();
+            diesel::table! {
+                temp_hashes (hash) {
+                    hash -> BigInt,
+                }
+            }
 
-        let mut map: std::collections::HashMap<u64, Vec<(u32, f32)>> =
-            std::collections::HashMap::new();
+            #[derive(Insertable)]
+            #[diesel(table_name=temp_hashes)]
+            struct NewHash {
+                hash: i64,
+            }
+
+            const BATCH_SIZE: usize = 5000;
+
+            for batch in hashes_in.chunks(BATCH_SIZE) {
+                let new_hashes: Vec<NewHash> = batch.iter().map(|&h| NewHash {hash: h}).collect();
+                diesel::insert_into(temp_hashes::table).values(&new_hashes).on_conflict_do_nothing().execute(conn).unwrap();
+            }
+
+            let query = "
+                SELECT
+                    f.hash , f.song_id , f.absolute_time_offset
+                FROM
+                    fingerprint AS f
+                INNER JOIN
+                    temp_hashes AS t ON f.hash = t.hash;
+                ";
+
+            diesel::sql_query(query).load::<FingerprintMatch>(conn)
+
+
+
+        }).expect("Transaction failed");
+
+        let mut map: HashMap<u64, Vec<(u32, f32)>> = HashMap::new();
 
         for rec in records {
             let h = rec.hash as u64;
-            let db_time = rec.absolute_time_offset as f32;
             let sid = rec.song_id as u32;
-            map.entry(h).or_insert_with(Vec::new).push((sid, db_time));
+            let db_time = rec.absolute_time_offset as f32;
+            map.entry(h).or_default().push((sid, db_time));
         }
-
         map
     }
 
