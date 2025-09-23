@@ -1,5 +1,3 @@
-use audio_gate::NoiseGate;
-use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::fs::File;
 use std::sync::{Arc, Mutex, mpsc};

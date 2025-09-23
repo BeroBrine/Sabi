@@ -2,7 +2,6 @@ use crate::{
     db::bindings::{Fingerprint, FingerprintMatch, NewSong, Songs},
     fingerprint::FingerprintInfo,
 };
-use anyhow::Result;
 use diesel::{RunQueryDsl, dsl::insert_into, prelude::*, upsert::on_constraint};
 use dotenvy::dotenv;
 use std::{collections::HashMap, env, time::SystemTime};
