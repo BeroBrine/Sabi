@@ -8,6 +8,7 @@ pub struct FFTDistribution {
     pub peaks: Vec<PeakInfo>,
 }
 
+#[derive(Clone)]
 pub struct PeakInfo {
     pub freq: OrderedFloat<f32>,
     pub magnitude: OrderedFloat<f32>,
@@ -113,8 +114,7 @@ impl CooleyTukeyFFT {
         while position + self.CHUNK_SIZE <= buf_len {
             let chunk = &buffer[position..position + self.CHUNK_SIZE];
 
-            // let windowed_chunk = self.apply_hann_window(chunk);
-            let windowed_chunk: Vec<f32> = chunk.iter().map(|&c| c.clone()).collect();
+            let windowed_chunk = self.apply_hann_window(chunk);
 
             let fft_output = self.perform_fft(windowed_chunk);
 
@@ -139,24 +139,33 @@ impl CooleyTukeyFFT {
         let n = complex_buffer.len();
         let half_n = n / 2;
 
-        let magnitudes: Vec<f32> = complex_buffer[..half_n]
+        // Compute magnitudes
+        let mut magnitudes: Vec<f32> = complex_buffer[..half_n]
             .iter()
             .map(|&c| c.norm_sqr().sqrt())
             .collect();
 
-        let mut peaks = Vec::new();
+        // --- Normalize magnitudes per frame ---
+        if let Some(&max_val) = magnitudes.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            if max_val > 0.0 {
+                for m in &mut magnitudes {
+                    *m /= max_val;
+                }
+            }
+        }
 
+        let mut raw_peaks = Vec::new();
+
+        // Find all local maxima in the spectrum
         for i in 1..half_n - 1 {
             if magnitudes[i - 1] < magnitudes[i] && magnitudes[i] > magnitudes[i + 1] {
                 let freq = i as f32 * (sample_rate as f32 / n as f32);
 
-                // music frequency
                 let lower_freq_limit = FreqRange::Low.get_freq();
-
                 let higher_freq_limit = FreqRange::High.get_freq();
 
                 if lower_freq_limit < freq && freq < higher_freq_limit {
-                    peaks.push(PeakInfo {
+                    raw_peaks.push(PeakInfo {
                         freq: OrderedFloat(freq),
                         magnitude: OrderedFloat(magnitudes[i]),
                     });
@@ -164,13 +173,63 @@ impl CooleyTukeyFFT {
             }
         }
 
-        peaks.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+        // --- Band splitting ---
+        let low_band: Vec<PeakInfo> = raw_peaks
+            .iter()
+            .filter(|p| (20.0..300.0).contains(&p.freq.into_inner()))
+            .cloned()
+            .collect();
 
-        peaks.truncate(5);
+        let mid_band: Vec<PeakInfo> = raw_peaks
+            .iter()
+            .filter(|p| (300.0..2000.0).contains(&p.freq.into_inner()))
+            .cloned()
+            .collect();
 
-        peaks
+        let high_band: Vec<PeakInfo> = raw_peaks
+            .iter()
+            .filter(|p| (2000.0..5000.0).contains(&p.freq.into_inner()))
+            .cloned()
+            .collect();
+
+        // --- Dynamic Thresholding & Peak Selection ---
+        let mut final_peaks = Vec::new();
+        const THRESHOLD_MULTIPLIER: f32 = 1.75; // Peak must be 1.75x stronger than the band's average.
+        const MAX_PEAKS_PER_BAND: usize = 5; // Safety cap to prevent too many fingerprints from one frame.
+
+        let process_band = |band: Vec<PeakInfo>| -> Vec<PeakInfo> {
+            if band.is_empty() {
+                return Vec::new();
+            }
+
+            // Calculate the average magnitude for this specific band
+            let total_magnitude: f32 = band.iter().map(|p| p.magnitude.into_inner()).sum();
+            let average_magnitude = total_magnitude / band.len() as f32;
+
+            let threshold = average_magnitude * THRESHOLD_MULTIPLIER;
+
+            // 1. Filter the peaks that are stronger than the threshold
+            let mut strong_peaks: Vec<PeakInfo> = band
+                .into_iter()
+                .filter(|p| p.magnitude.into_inner() > threshold)
+                .collect();
+
+            // 2. Sort the remaining strong peaks by magnitude
+            strong_peaks.sort_by(|a, b| b.magnitude.partial_cmp(&a.magnitude).unwrap());
+
+            // 3. Apply the safety cap
+            strong_peaks.truncate(MAX_PEAKS_PER_BAND);
+
+            strong_peaks
+        };
+
+        // Process each band and collect the results
+        final_peaks.extend(process_band(low_band));
+        final_peaks.extend(process_band(mid_band));
+        final_peaks.extend(process_band(high_band));
+
+        final_peaks
     }
-
     fn convert_to_complex_buffer(&self, buffer: Vec<f32>) -> Vec<Complex> {
         buffer
             .iter()
@@ -195,9 +254,11 @@ impl FreqRange {
 
 impl Default for CooleyTukeyFFT {
     fn default() -> Self {
+        let chunk_size = 2048;
+        let overlap_size = chunk_size / 2;
         Self {
-            CHUNK_SIZE: 4096,
-            OVERLAP_SIZE: 2048,
+            CHUNK_SIZE: chunk_size,
+            OVERLAP_SIZE: overlap_size,
         }
     }
 }
